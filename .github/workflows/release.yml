@@ -1,0 +1,141 @@
+name: Release
+
+# Started by hand from the Actions tab, on main. The bump comes from the
+# Version advice run for the commit being released.
+#
+# A tag is not the trigger, it is the result. Go resolves a module version
+# straight from the tag and proxy.golang.org caches it permanently, so the tag
+# must not exist until the checks have passed: a failed check after the fact
+# cannot withdraw a published version.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Bump from the last release
+        required: true
+        type: choice
+        options: [patch, minor]
+      version:
+        description: Exact version to release, e.g. 0.2.0 (overrides the bump)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  # Ahead of verify so a dispatch from the wrong ref fails in seconds rather
+  # than after the full matrix.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatched from main
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          if [ "${REF}" != "main" ]; then
+            echo "::error::Release must be run on main; this run is on ${REF}."
+            exit 1
+          fi
+
+  verify:
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Work out the version
+        id: target
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXACT: ${{ inputs.version }}
+        run: |
+          if [ -n "${EXACT}" ]; then
+            next="${EXACT#v}"
+          else
+            base=$(git tag --list 'v0.*' --sort=-v:refname | head -1)
+            if [ -z "${base}" ]; then
+              next="0.1.0"
+            else
+              current="${base#v}"
+              if ! printf '%s' "${current}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "::error::last tag ${base} is not a plain X.Y.Z; pass an exact version instead"
+                exit 1
+              fi
+              IFS=. read -r major minor patch <<< "${current}"
+              case "${BUMP}" in
+                minor) minor=$((minor + 1)); patch=0 ;;
+                patch) patch=$((patch + 1)) ;;
+                *) echo "::error::unknown bump ${BUMP}"; exit 1 ;;
+              esac
+              next="${major}.${minor}.${patch}"
+            fi
+          fi
+
+          # v0 by policy; see CONTRIBUTING.md. A v1 tag could not be withdrawn.
+          case "${next}" in
+            0.*) ;;
+            *)
+              echo "::error::v${next} is not a v0 release. This module is v0 by policy; see CONTRIBUTING.md."
+              exit 1
+              ;;
+          esac
+
+          if git rev-parse "v${next}" >/dev/null 2>&1; then
+            echo "::error::v${next} is already tagged"
+            exit 1
+          fi
+
+          echo "tag=v${next}" >> "$GITHUB_OUTPUT"
+          echo "releasing v${next}" >> "$GITHUB_STEP_SUMMARY"
+
+      # Everything above this line is a check. The tag is the publish.
+      - name: Tag
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          prerelease=""
+          case "${TAG}" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          # shellcheck disable=SC2086 # prerelease is a single optional flag
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --generate-notes \
+            --verify-tag \
+            ${prerelease}
+
+      # Asking the proxy for the new version is what gets it indexed on
+      # pkg.go.dev, rather than waiting for the next crawl.
+      - name: Warm the module proxy
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOFLAGS: -mod=mod
+          TAG: ${{ steps.target.outputs.tag }}
+        run: go list -m "github.com/justintout/systemone@${TAG}"

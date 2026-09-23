@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # The Go module has no dependencies; these are the pinned action versions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci:"

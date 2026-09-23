@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So the release workflow runs exactly these jobs rather than a second copy
+  # of them that can drift.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to a branch supersedes the run already in flight for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest version go.mod claims to support, and the current release.
+        go: ['1.24', 'stable']
+    name: test (go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      # Runs go vet, staticcheck, errcheck, unused and gofmt; see .golangci.yml.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          # git diff only sees tracked files, and the first dependency added
+          # creates go.sum untracked, so a plain diff would pass without it.
+          if [ -n "$(git status --porcelain --untracked-files=all -- go.mod go.sum)" ]; then
+            echo "::error::go mod tidy changed go.mod or go.sum; commit the result"
+            git status --porcelain --untracked-files=all -- go.mod go.sum
+            exit 1
+          fi
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      # With no third-party dependencies this scans the standard library the
+      # module builds against.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...

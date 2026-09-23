@@ -1,0 +1,143 @@
+name: Version advice
+
+# Advisory only. It works out what the next tag would be and writes the
+# reasoning to the run's job summary. Nothing here pushes, tags or publishes:
+# a judgment with a probability attached should not be the thing that makes a
+# permanent decision.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-advice
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # The implicit shell is bash -e without pipefail, which would let a failed
+    # command in a pipeline pass silently.
+    shell: bash -euo pipefail {0}
+
+jobs:
+  advise:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Find the last release
+        id: state
+        run: |
+          base=$(git tag --list 'v0.*' --sort=-v:refname | head -1)
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          if [ -z "${base}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "no release tag yet; nothing to compare against" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$(git log --format='%s' "${base}..HEAD")" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "${base} is already at HEAD; nothing unreleased" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare the exported API against the last release
+        if: steps.state.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.state.outputs.base }}
+        run: |
+          # Pinned rather than @latest: this job holds the API key, so an
+          # unpinned tool is the only supply-chain surface in a module with no
+          # dependencies.
+          go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260908205506-85c1c2202aba
+
+          # apidiff needs the old package built from its own checkout.
+          git worktree add -q -f /tmp/base "${BASE}"
+          (cd /tmp/base && apidiff -w /tmp/base.api github.com/justintout/systemone)
+          apidiff /tmp/base.api github.com/justintout/systemone > /tmp/apidiff.txt
+          cat /tmp/apidiff.txt
+
+      - name: Collect the changes since the last release
+        if: steps.state.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.state.outputs.base }}
+        run: |
+          touch /tmp/apidiff.txt
+          # The same pathspec for both, so the commit list and the diff cannot
+          # point in opposite directions. Only what a consumer receives:
+          # repository scaffolding is excluded so it cannot look like a reason
+          # to release.
+          git log --format='%s' "${BASE}..HEAD" -- '*.go' 'go.mod' ':!*_test.go' ':!examples' ':!internal' \
+            > /tmp/commits.txt
+          git diff "${BASE}..HEAD" -- '*.go' 'go.mod' ':!*_test.go' ':!examples' ':!internal' \
+            > /tmp/diff.txt
+          wc -l /tmp/commits.txt /tmp/diff.txt
+
+      - name: Judge the bump
+        id: decide
+        if: steps.state.outputs.changed == 'true'
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          BASE: ${{ steps.state.outputs.base }}
+        run: |
+          if [ -z "${TYPESAFE_API_KEY}" ]; then
+            echo "::error::TYPESAFE_API_KEY is not set; the release bot cannot judge the changes"
+            exit 1
+          fi
+          go run ./internal/releasebot \
+            -base "${BASE}" \
+            -diff /tmp/diff.txt \
+            -apidiff /tmp/apidiff.txt \
+            -log /tmp/commits.txt
+
+      - name: Write the advice
+        if: steps.state.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.state.outputs.base }}
+          RELEASE: ${{ steps.decide.outputs.release }}
+          BUMP: ${{ steps.decide.outputs.bump }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          if [ "${RELEASE}" != "true" ]; then
+            {
+              printf '## No release suggested\n\n'
+              printf '%s\n' "${REASON}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Only X.Y.Z. A prerelease base would lose its suffix in the
+          # arithmetic below and suggest a version that is already tagged.
+          current="${BASE#v}"
+          if ! printf '%s' "${current}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            {
+              printf '## Suggested bump: %s\n\n' "${BUMP}"
+              printf '%s\n\n' "${REASON}"
+              printf 'The last tag %s is not a plain X.Y.Z, so work out the next one by hand.\n' "${BASE}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<< "${current}"
+          case "${BUMP}" in
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "::error::unknown bump ${BUMP}"; exit 1 ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+
+          {
+            printf '## Suggested next release: %s (%s)\n\n' "${next}" "${BUMP}"
+            printf '%s\n\n' "${REASON}"
+            printf 'Since %s:\n\n' "${BASE}"
+            sed 's/^/- /' /tmp/commits.txt
+            printf '\nTo release, run the Release workflow on main with bump=%s.\n' "${BUMP}"
+            printf 'It tags only after the checks pass; tagging by hand is blocked.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

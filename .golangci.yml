@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck and unused are on by default.
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+  exclusions:
+    presets:
+      # Ignores a deferred Close, among other conventional standard-library
+      # calls whose error a caller cannot act on.
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
