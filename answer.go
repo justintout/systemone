@@ -26,7 +26,6 @@ type Response struct {
 	RequestID string
 
 	answers map[string]json.RawMessage
-	raw     []byte
 }
 
 // IDs returns the question IDs the response carries, sorted. It includes IDs
@@ -39,11 +38,6 @@ func (r *Response) IDs() []string {
 	slices.Sort(ids)
 	return ids
 }
-
-// Raw returns the undecoded response body, for logging and for inspecting an
-// answer this package does not recognize. The caller must not modify the
-// returned bytes.
-func (r *Response) Raw() []byte { return r.raw }
 
 // rawAnswer is the union of the three answer shapes, decoded when a handle
 // narrows it to a typed answer.
@@ -133,6 +127,5 @@ func decodeResponse(data []byte) (*Response, error) {
 		Model:   body.Model,
 		Usage:   body.Usage,
 		answers: body.Answers,
-		raw:     data,
 	}, nil
 }

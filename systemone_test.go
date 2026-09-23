@@ -570,8 +570,8 @@ func TestPerCallTimeout(t *testing.T) {
 	})
 }
 
-// An answer kind this package does not decode still reaches the caller
-// undecoded, so a response is never silently lost.
+// An answer this package cannot decode is still reported by IDs, so a
+// response carrying one is not silently empty.
 func TestUnmodeledAnswers(t *testing.T) {
 	const reply = `{"model":"jev-1.13.0","answers":{"future":{"type":"tally","tally":[1,2]}},"usage":{"input_tokens":1,"output_tokens":1}}`
 	c, _ := stub(t, reply)
@@ -579,9 +579,6 @@ func TestUnmodeledAnswers(t *testing.T) {
 	res, err := c.Ask(context.Background(), "state", dept)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !strings.Contains(string(res.Raw()), `"tally"`) {
-		t.Errorf("Raw() = %s", res.Raw())
 	}
 	if ids := res.IDs(); len(ids) != 1 || ids[0] != "future" {
 		t.Errorf("IDs() = %v", ids)
