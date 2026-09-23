@@ -12,8 +12,6 @@ checked by the compiler rather than compared against string literals.
 go get github.com/justintout/systemone
 ```
 
-No dependencies outside the standard library. Requires Go 1.24.
-
 > This is an unofficial, community-maintained client. It is not built,
 > endorsed, or supported by TypeSafe. The official SDKs are
 > [Python](https://docs.typesafe.ai/sdk/python) and
@@ -25,78 +23,29 @@ A question is a value. Declare it once with the Go type its answer uses, then
 read the answer back through the same handle.
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-
-	"github.com/justintout/systemone"
-)
-
 type Team string
 
 const (
 	Billing   Team = "billing"
 	Technical Team = "technical"
-	Sales     Team = "sales"
-)
-
-type Anger int
-
-const (
-	Calm Anger = iota
-	Frustrated
-	Furious
 )
 
 var (
 	team = systemone.NewChoice[Team]("team", "Which team should handle this message?",
 		systemone.Option(Billing, "Payments, invoicing, refunds"),
 		systemone.Option(Technical, "Bugs, outages, integrations"),
-		systemone.Option(Sales, "Pricing, upgrades, new accounts"),
 	)
-	urgent = systemone.NewNoul("urgent", "Does this convey urgency?",
-		systemone.Yes("Explicitly time-sensitive"),
-		systemone.No("No urgency expressed"),
-	)
-	anger = systemone.NewScore[Anger]("anger", "How frustrated is the customer?",
-		systemone.Levels[Anger](
-			"Calm and matter-of-fact",
-			"Visibly frustrated",
-			"Angry, threatening to leave",
-		),
-	)
+	urgent = systemone.NewNoul("urgent", "Does this convey urgency?")
 )
 
-func main() {
-	client, err := systemone.New() // reads TYPESAFE_API_KEY
-	if err != nil {
-		log.Fatal(err)
-	}
+client, err := systemone.New() // reads TYPESAFE_API_KEY
 
-	ticket := map[string]any{
-		"subject": "Payouts failing",
-		"body":    "Help! My payouts have been failing for 3 days and nobody has replied.",
-	}
+res, err := client.Ask(ctx, ticket, team, urgent)
 
-	res, err := client.Ask(context.Background(), ticket, team, urgent, anger)
-	if err != nil {
-		log.Fatal(err)
-	}
+t, err := team.From(res)   // systemone.ChoiceAnswer[Team]
+u, err := urgent.From(res) // systemone.NoulAnswer
 
-	t, err := team.From(res)   // systemone.ChoiceAnswer[Team]
-	if err != nil {
-		log.Fatal(err)
-	}
-	a, err := anger.From(res)  // systemone.ScoreAnswer[Anger]
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(t.Value, t.Confidence, a.Level, a.Describe())
-}
+fmt.Println(t.Value, t.Confidence, u.Value)
 ```
 
 `From` is the only way to reach an answer, which is what keeps the typing
@@ -105,10 +54,9 @@ honest: there is no untyped map to fall back to. `t.Value` is a `Team`, so a
 option name, or a level enum borrowed from a different question, is a build
 failure rather than a branch that silently never fires.
 
-Independent questions belong in one request. They are answered in parallel
-against the same state and cannot see one another's answers, which makes
-speculative questions cheap: ask the branch-specific ones up front and read only
-the answers your code ends up needing.
+See [`examples/`](examples) for more, including the support-ticket walkthrough
+from the [quick start](https://docs.typesafe.ai/introduction/quickstart)
+written with this SDK.
 
 ## Primitives
 
@@ -157,7 +105,7 @@ client, err := systemone.New(
 ```go
 res, err := client.Do(ctx, systemone.Request{
 	State:     ticket,
-	Questions: []systemone.Question{team, urgent, anger},
+	Questions: []systemone.Question{team, urgent},
 	Model:     "jev-1.13.0",
 	Header:    http.Header{"X-Trace-Id": {id}},
 	Retry:     &policy,              // nil inherits the client's
@@ -203,63 +151,6 @@ At `info` each record is a summary: method, URL, attempt, duration, status, and
 request ID. At `debug` it also carries headers and bodies. Credential headers
 are redacted; bodies are not, and the request body holds your state.
 
-### Forward compatibility
-
-Two escape hatches let you use an API feature before this package models it.
-Both skip every check the typed path applies, so upgrade instead when you can.
-
-`Request.Extra` adds top-level request fields. A key that collides with
-`state`, `model` or `questions` is an error rather than an override.
-
-```go
-res, err := client.Do(ctx, systemone.Request{
-	State:     ticket,
-	Questions: []systemone.Question{team},
-	Extra:     map[string]any{"beam_width": 4},
-})
-```
-
-`RawQuestion` sends a question shape this package does not model. Its answer
-comes back as undecoded JSON, and `Response.Raw()` gives you the whole body,
-which is how you reach answer kinds the typed path skips.
-
-```go
-q := systemone.RawQuestion{
-	QuestionID: "tally",
-	Body:       map[string]any{"type": "tally", "instructions": "Count the line items"},
-}
-res, err := client.Ask(ctx, invoice, q)
-answer, err := q.From(res) // json.RawMessage
-```
-
-## Contributing
-
-CI runs on every pull request: build and race tests on Go
-1.24 and current stable, `golangci-lint` (which covers `go vet`, `staticcheck`,
-`errcheck`, `unused` and `gofmt`), a `go mod tidy` check, and `govulncheck`.
-
-To run the same checks locally:
-
-```sh
-go test -race ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-```
-
-Releases and the versioning policy are described in
-[CONTRIBUTING.md](CONTRIBUTING.md#versioning).
-
-## Examples
-
-[`examples/triage`](examples/triage) is the support-ticket walkthrough from the
-[quick start](https://docs.typesafe.ai/introduction/quickstart), written with
-this SDK: one request, three questions, routing in code.
-
-```sh
-export TYPESAFE_API_KEY=...
-go run ./examples/triage
-```
-
 ## Patterns
 
 `pattern` composes answers the way the TypeSafe docs describe. It is ordinary
@@ -273,6 +164,11 @@ code over answers this package returns; the thresholds and weights are yours.
   subtree so the model can see what lives under a branch before committing.
   Every step carries the full sibling distribution, so a beam search over close
   branches is a few lines on top.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks CI runs, the conventions
+the code follows, and the versioning and release policy.
 
 ## License
 
