@@ -30,8 +30,7 @@ type Response struct {
 }
 
 // IDs returns the question IDs the response carries, sorted. It includes IDs
-// whose answers this package does not recognize, which a question the SDK
-// predates can still produce.
+// whose answers this package does not recognize.
 func (r *Response) IDs() []string {
 	ids := make([]string, 0, len(r.answers))
 	for id := range r.answers {
@@ -41,8 +40,9 @@ func (r *Response) IDs() []string {
 	return ids
 }
 
-// Raw returns the undecoded response body. Use it to reach answer kinds this
-// package does not model yet. The caller must not modify the returned bytes.
+// Raw returns the undecoded response body, for logging and for inspecting an
+// answer this package does not recognize. The caller must not modify the
+// returned bytes.
 func (r *Response) Raw() []byte { return r.raw }
 
 // rawAnswer is the union of the three answer shapes, decoded when a handle
