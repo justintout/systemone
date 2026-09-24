@@ -146,12 +146,6 @@ func TestQuestionWireFormat(t *testing.T) {
 			map[string]any{"question": "Same person as `candidate`?"},
 			systemone.Yes(map[string]any{"what": "A match"})),
 		want: `{"q":{"type":"noul","instructions":{"question":"Same person as ` + "`candidate`" + `?"},"criteria":{"true":{"what":"A match"}}}}`,
-	}, {
-		name: "raw question is sent as given",
-		question: systemone.RawQuestion{QuestionID: "q", Body: map[string]any{
-			"type": "tally", "instructions": "Count them",
-		}},
-		want: `{"q":{"instructions":"Count them","type":"tally"}}`,
 	}}
 
 	for _, tt := range tests {
@@ -311,10 +305,6 @@ func TestAnswerLookupErrors(t *testing.T) {
 		name: "id answered by a different primitive",
 		read: func() error { _, err := systemone.NewNoul("department", "Anything?").From(res); return err },
 		want: systemone.ErrAnswerType,
-	}, {
-		name: "raw question with no answer",
-		read: func() error { _, err := systemone.RawQuestion{QuestionID: "absent"}.From(res); return err },
-		want: systemone.ErrNoAnswer,
 	}}
 
 	for _, tt := range tests {
@@ -352,8 +342,6 @@ func TestInvalidQuestionsFailTheCall(t *testing.T) {
 			systemone.Level(Calm, ""), systemone.Level(Frustrated, "Frustrated"))},
 		{"too few levels", systemone.NewScore[Frustration]("q", "Rate",
 			systemone.Level(Calm, "Calm"))},
-		{"raw question with no body", systemone.RawQuestion{QuestionID: "q"}},
-		{"raw question with no id", systemone.RawQuestion{Body: map[string]any{"type": "noul"}}},
 	}
 
 	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -381,9 +369,6 @@ func TestInvalidRequestsFailBeforeSending(t *testing.T) {
 		{"no questions", systemone.Request{State: "state"}},
 		{"one question asked twice", systemone.Request{
 			State: "state", Questions: []systemone.Question{dept, dept}}},
-		{"extra field collides with the body", systemone.Request{
-			State: "state", Questions: []systemone.Question{dept},
-			Extra: map[string]any{"questions": "nope"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -585,44 +570,22 @@ func TestPerCallTimeout(t *testing.T) {
 	})
 }
 
-func TestExtraBodyFields(t *testing.T) {
-	c, rec := stub(t, answersJSON)
-	if _, err := c.Do(context.Background(), systemone.Request{
-		State: "state", Questions: []systemone.Question{dept},
-		Extra: map[string]any{"beam_width": 4},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := rec.field(t, "beam_width"); got != "4" {
-		t.Errorf("beam_width = %s", got)
-	}
-	if got := rec.field(t, "state"); got != `"state"` {
-		t.Errorf("extra fields clobbered the body: %s", got)
-	}
-}
-
-// An answer kind this package does not model is still reachable, undecoded.
-func TestRawAnswers(t *testing.T) {
-	const reply = `{"model":"jev-1.13.0","answers":{"future":{"type":"tally","tally":[1,2]}},"usage":{"input_tokens":1,"output_tokens":1}}`
+// An answer for an ID the caller did not ask about is skipped. The answers
+// the caller did ask for are read through their handles as usual.
+func TestUnaskedAnswersAreIgnored(t *testing.T) {
+	const reply = `{"model":"jev-1.13.0","answers":{"department":{"type":"choice","choice":"billing","confidence":0.9,"probabilities":{"billing":0.9,"technical":0.1}},"future":{"type":"tally","tally":[1,2]}},"usage":{"input_tokens":1,"output_tokens":1}}`
 	c, _ := stub(t, reply)
-	q := systemone.RawQuestion{QuestionID: "future", Body: map[string]any{"type": "tally", "instructions": "Count"}}
 
-	res, err := c.Ask(context.Background(), "state", q)
+	res, err := c.Ask(context.Background(), "state", dept)
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := q.From(res)
+	d, err := dept.From(res)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(answer), `"tally"`) {
-		t.Errorf("raw answer = %s", answer)
-	}
-	if !strings.Contains(string(res.Raw()), `"tally"`) {
-		t.Errorf("Raw() = %s", res.Raw())
-	}
-	if ids := res.IDs(); len(ids) != 1 || ids[0] != "future" {
-		t.Errorf("IDs() = %v", ids)
+	if d.Value != Billing {
+		t.Errorf("Value = %v, want %v", d.Value, Billing)
 	}
 }
 

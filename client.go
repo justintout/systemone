@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"slices"
 	"time"
 )
 
@@ -106,10 +105,6 @@ type Request struct {
 	// inherits it, and [NoTimeout] removes the bound. To bound the whole call
 	// including retries, give ctx a deadline.
 	Timeout time.Duration
-	// Extra adds top-level fields to the request body, for API features this
-	// package does not model yet. A key that collides with state, model or
-	// questions is an error rather than an override. Prefer upgrading the SDK.
-	Extra map[string]any
 }
 
 type requestBody struct {
@@ -117,9 +112,6 @@ type requestBody struct {
 	Model     string `json:"model"`
 	Questions pairs  `json:"questions"`
 }
-
-// reserved names the top-level fields [Request.Extra] may not set.
-var reserved = []string{"state", "model", "questions"}
 
 // Ask evaluates state against questions using the client's default model. It is
 // [Client.Do] for the common case.
@@ -229,33 +221,7 @@ func (c *Client) encodeRequest(req Request) ([]byte, error) {
 	if model == "" {
 		model = c.model
 	}
-	body, err := json.Marshal(requestBody{State: req.State, Model: model, Questions: qs})
-	if err != nil {
-		return nil, err
-	}
-	if len(req.Extra) == 0 {
-		return body, nil
-	}
-	return mergeExtra(body, req.Extra)
-}
-
-// mergeExtra adds Request.Extra to an encoded request body.
-func mergeExtra(body []byte, extra map[string]any) ([]byte, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return nil, err
-	}
-	for key, value := range extra {
-		if slices.Contains(reserved, key) {
-			return nil, fmt.Errorf("systemone: extra field %q is part of the request body", key)
-		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("systemone: extra field %q: %w", key, err)
-		}
-		fields[key] = encoded
-	}
-	return json.Marshal(fields)
+	return json.Marshal(requestBody{State: req.State, Model: model, Questions: qs})
 }
 
 // call is one API call and the per-request overrides that apply to it.
