@@ -3,9 +3,9 @@
 [![CI](https://github.com/justintout/systemone/actions/workflows/ci.yml/badge.svg)](https://github.com/justintout/systemone/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/justintout/systemone.svg)](https://pkg.go.dev/github.com/justintout/systemone)
 
-A fully typed Go client for the [TypeSafe System One API](https://docs.typesafe.ai).
-Send one state and a set of questions; get one answer per question, each bound
-to the Go type you declared the question with, so options and score levels are
+A Go client for the [TypeSafe System One API](https://docs.typesafe.ai). Send
+one state and a set of questions; get one answer per question, each bound to
+the Go type you declared the question with, so options and score levels are
 checked by the compiler rather than compared against string literals.
 
 ```
@@ -66,13 +66,24 @@ written with this SDK.
 | `NewNoul` | `NoulAnswer`: `Value`, the probability of yes | Whether a condition holds |
 | `NewScore[T ~int]` | `ScoreAnswer[T]`: `Value`, `Level`, `Legend`, `Probabilities`, `Confidence` | Degree along ordered levels |
 
-Instructions and every criterion take a string or any JSON-encodable structure,
-so a question can carry named data it refers to by backticked path:
+Instructions and every criterion take a string or any value that encodes to a
+JSON object or array, so a question can carry named data it refers to by
+backticked path. Your own types work; there is no reason to reach for a map:
 
 ```go
-var duplicate = systemone.NewNoul("duplicate", map[string]any{
-	"candidate": map[string]string{"name": "John Smith", "last_employer": "Google"},
-	"question":  "Is the resume for the same person as `candidate`?",
+type Candidate struct {
+	Name         string `json:"name"`
+	LastEmployer string `json:"last_employer"`
+}
+
+type match struct {
+	Candidate Candidate `json:"candidate"`
+	Question  string    `json:"question"`
+}
+
+var duplicate = systemone.NewNoul("duplicate", match{
+	Candidate: Candidate{Name: "John Smith", LastEmployer: "Google"},
+	Question:  "Is the resume for the same person as `candidate`?",
 })
 ```
 
