@@ -3,9 +3,9 @@
 [![CI](https://github.com/justintout/systemone/actions/workflows/ci.yml/badge.svg)](https://github.com/justintout/systemone/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/justintout/systemone.svg)](https://pkg.go.dev/github.com/justintout/systemone)
 
-A fully typed Go client for the [TypeSafe System One API](https://docs.typesafe.ai).
-Send one state and a set of questions; get one answer per question, each bound
-to the Go type you declared the question with, so options and score levels are
+A Go client for the [TypeSafe System One API](https://docs.typesafe.ai). Send
+one state and a set of questions; get one answer per question, each bound to
+the Go type you declared the question with, so options and score levels are
 checked by the compiler rather than compared against string literals.
 
 ```
