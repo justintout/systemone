@@ -3,7 +3,6 @@ package systemone
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 )
 
 // Usage is the token count the request was billed on. Only input tokens are
@@ -26,17 +25,6 @@ type Response struct {
 	RequestID string
 
 	answers map[string]json.RawMessage
-}
-
-// IDs returns the question IDs the response carries, sorted. It includes IDs
-// whose answers this package does not recognize.
-func (r *Response) IDs() []string {
-	ids := make([]string, 0, len(r.answers))
-	for id := range r.answers {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
 }
 
 // rawAnswer is the union of the three answer shapes, decoded when a handle

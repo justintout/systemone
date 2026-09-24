@@ -570,18 +570,22 @@ func TestPerCallTimeout(t *testing.T) {
 	})
 }
 
-// An answer this package cannot decode is still reported by IDs, so a
-// response carrying one is not silently empty.
-func TestUnmodeledAnswers(t *testing.T) {
-	const reply = `{"model":"jev-1.13.0","answers":{"future":{"type":"tally","tally":[1,2]}},"usage":{"input_tokens":1,"output_tokens":1}}`
+// An answer for an ID the caller did not ask about is skipped. The answers
+// the caller did ask for are read through their handles as usual.
+func TestUnaskedAnswersAreIgnored(t *testing.T) {
+	const reply = `{"model":"jev-1.13.0","answers":{"department":{"type":"choice","choice":"billing","confidence":0.9,"probabilities":{"billing":0.9,"technical":0.1}},"future":{"type":"tally","tally":[1,2]}},"usage":{"input_tokens":1,"output_tokens":1}}`
 	c, _ := stub(t, reply)
 
 	res, err := c.Ask(context.Background(), "state", dept)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ids := res.IDs(); len(ids) != 1 || ids[0] != "future" {
-		t.Errorf("IDs() = %v", ids)
+	d, err := dept.From(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Value != Billing {
+		t.Errorf("Value = %v, want %v", d.Value, Billing)
 	}
 }
 
