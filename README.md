@@ -66,13 +66,24 @@ written with this SDK.
 | `NewNoul` | `NoulAnswer`: `Value`, the probability of yes | Whether a condition holds |
 | `NewScore[T ~int]` | `ScoreAnswer[T]`: `Value`, `Level`, `Legend`, `Probabilities`, `Confidence` | Degree along ordered levels |
 
-Instructions and every criterion take a string or any JSON-encodable structure,
-so a question can carry named data it refers to by backticked path:
+Instructions and every criterion take a string or any value that encodes to a
+JSON object or array, so a question can carry named data it refers to by
+backticked path. Your own types work; there is no reason to reach for a map:
 
 ```go
-var duplicate = systemone.NewNoul("duplicate", map[string]any{
-	"candidate": map[string]string{"name": "John Smith", "last_employer": "Google"},
-	"question":  "Is the resume for the same person as `candidate`?",
+type Candidate struct {
+	Name         string `json:"name"`
+	LastEmployer string `json:"last_employer"`
+}
+
+type match struct {
+	Candidate Candidate `json:"candidate"`
+	Question  string    `json:"question"`
+}
+
+var duplicate = systemone.NewNoul("duplicate", match{
+	Candidate: Candidate{Name: "John Smith", LastEmployer: "Google"},
+	Question:  "Is the resume for the same person as `candidate`?",
 })
 ```
 
