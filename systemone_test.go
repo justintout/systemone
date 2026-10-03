@@ -174,7 +174,7 @@ func TestRequestTransport(t *testing.T) {
 		{"auth", req.Header.Get("Authorization"), "Bearer test-key"},
 		{"content type", req.Header.Get("Content-Type"), "application/json"},
 		{"state", rec.field(t, "state"), `"state"`},
-		{"model", rec.field(t, "model"), `"` + systemone.DefaultModel + `"`},
+		{"model", rec.field(t, "model"), `"` + systemone.JevLatest + `"`},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
@@ -650,6 +650,10 @@ func TestClientOptions(t *testing.T) {
 			{"relative base url", systemone.WithBaseURL("/v1")},
 			{"unparseable base url", systemone.WithBaseURL("http://a b")},
 			{"empty model", systemone.WithModel("")},
+			{"empty evaluate path", systemone.WithEvaluatePath("")},
+			{"provider without a base url", systemone.WithProvider(systemone.Provider{DefaultModel: "m", EvaluatePath: "/p"})},
+			{"provider without a model", systemone.WithProvider(systemone.Provider{BaseURL: "https://example.test", EvaluatePath: "/p"})},
+			{"provider without an evaluate path", systemone.WithProvider(systemone.Provider{BaseURL: "https://example.test", DefaultModel: "m"})},
 			{"nil http client", systemone.WithHTTPClient(nil)},
 			{"empty header name", systemone.WithHeader("", "v")},
 			{"negative timeout", systemone.WithTimeout(-time.Second)},
@@ -892,6 +896,68 @@ func TestIncompleteAnswersAreRejected(t *testing.T) {
 				t.Errorf("err = %v, want ErrIncompleteAnswer", err)
 			}
 		})
+	}
+}
+
+// Clef on Workers AI sends and receives the same payload as Jev, so a provider
+// only has to move the model into the URL, unwrap the envelope, and say that
+// there is no model listing.
+func TestCloudflareProvider(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.Calls.Add(1)
+		rec.Body, _ = io.ReadAll(r.Body)
+		rec.Request = r
+		w.Header().Set("Cf-Ray", "9d1f2c3a4b5e6f70-ORD")
+		fmt.Fprintf(w, `{"result":%s,"success":true,"errors":[],"messages":[]}`, answersJSON)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := systemone.New(
+		systemone.WithAPIKey("cf-token"),
+		systemone.WithProvider(systemone.Cloudflare("acct-1")),
+		systemone.WithBaseURL(srv.URL),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Model() != systemone.Clef {
+		t.Errorf("model = %q, want %q", c.Model(), systemone.Clef)
+	}
+
+	res, err := c.Do(context.Background(), systemone.Request{
+		State: "Checkout has been failing for an hour.", Questions: []systemone.Question{urgent},
+		Model: systemone.ClefFlash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef-flash"; rec.Request.URL.Path != want {
+		t.Errorf("path = %q, want %q", rec.Request.URL.Path, want)
+	}
+	// The model stays in the body as well, which is what Clef validates.
+	if got := rec.field(t, "model"); got != `"clef-flash"` {
+		t.Errorf("body model = %s", got)
+	}
+	if res.RequestID != "9d1f2c3a4b5e6f70-ORD" {
+		t.Errorf("RequestID = %q", res.RequestID)
+	}
+	u, err := urgent.From(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Value != 0.95 {
+		t.Errorf("noul = %v", u.Value)
+	}
+	if _, err := c.Models(context.Background()); !errors.Is(err, systemone.ErrNoModelList) {
+		t.Errorf("Models err = %v, want ErrNoModelList", err)
+	}
+
+	// A reply that is not in the envelope the provider names is an error, not an
+	// empty set of answers.
+	plain, _ := stub(t, answersJSON, systemone.WithResultKey("result"))
+	if _, err := plain.Ask(context.Background(), "state", urgent); err == nil {
+		t.Error("want an error for a response missing the result field")
 	}
 }
 

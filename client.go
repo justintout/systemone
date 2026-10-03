@@ -15,28 +15,27 @@ import (
 	"time"
 )
 
-const (
-	evaluatePath = "/v1/systemone"
-	modelsPath   = "/v1/models"
-	requestIDHdr = "X-Typesafe-Request-Id"
-)
-
 // NoTimeout removes the per-attempt bound from a call when given as a
 // [Request.Timeout]. Any negative duration does the same.
 const NoTimeout = -1 * time.Nanosecond
 
 // Client sends requests to the System One API. It is safe for concurrent use.
 type Client struct {
-	http      *http.Client
-	baseURL   *url.URL
-	apiKey    string
-	model     string
-	header    http.Header
-	retry     RetryPolicy
-	timeout   time.Duration
-	userAgent string
-	logger    logger
-	now       func() time.Time
+	http    *http.Client
+	baseURL *url.URL
+	apiKey  string
+	model   string
+	header  http.Header
+	// Paths, envelope and request ID header of the deployment. See [Provider].
+	evaluatePath string
+	modelsPath   string
+	resultKey    string
+	requestIDHdr string
+	retry        RetryPolicy
+	timeout      time.Duration
+	userAgent    string
+	logger       logger
+	now          func() time.Time
 }
 
 // New builds a client. Without options it reads the API key from APIKeyEnv, the
@@ -45,19 +44,19 @@ func New(opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		http:      &http.Client{},
 		apiKey:    os.Getenv(APIKeyEnv),
-		model:     DefaultModel,
 		header:    make(http.Header),
 		timeout:   DefaultTimeout,
 		userAgent: fmt.Sprintf("go-systemone/%s (%s; %s)", version(), runtime.Version(), runtime.GOOS),
 		logger:    logger{level: slog.LevelInfo},
 		now:       time.Now,
 	}
-	base := DefaultBaseURL
-	if v := os.Getenv(BaseURLEnv); v != "" {
-		base = v
-	}
-	if err := WithBaseURL(base).apply(c); err != nil {
+	if err := WithProvider(TypeSafe()).apply(c); err != nil {
 		return nil, err
+	}
+	if v := os.Getenv(BaseURLEnv); v != "" {
+		if err := WithBaseURL(v).apply(c); err != nil {
+			return nil, err
+		}
 	}
 	if v := os.Getenv(DefaultModelEnv); v != "" {
 		c.model = v
@@ -121,22 +120,30 @@ func (c *Client) Ask(ctx context.Context, state any, questions ...Question) (*Re
 
 // Do sends one evaluation request.
 func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
-	body, err := c.encodeRequest(req)
+	model := req.Model
+	if model == "" {
+		model = c.model
+	}
+	body, err := c.encodeRequest(req, model)
 	if err != nil {
 		return nil, err
 	}
 	res, err := c.send(ctx, call{
-		method:  http.MethodPost,
-		path:    evaluatePath,
-		body:    body,
-		header:  req.Header,
-		retry:   req.Retry,
-		timeout: req.Timeout,
+		method:   http.MethodPost,
+		endpoint: c.evaluateEndpoint(model),
+		body:     body,
+		header:   req.Header,
+		retry:    req.Retry,
+		timeout:  req.Timeout,
 	})
 	if err != nil {
 		return nil, err
 	}
-	out, err := decodeResponse(res.body)
+	payload, err := unwrap(res.body, c.resultKey)
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeResponse(payload)
 	if err != nil {
 		return nil, fmt.Errorf("systemone: decoding response: %w", err)
 	}
@@ -183,7 +190,10 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 // Models lists the models the account can use. See
 // https://docs.typesafe.ai/models.
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	res, err := c.send(ctx, call{method: http.MethodGet, path: modelsPath})
+	if c.modelsPath == "" {
+		return nil, ErrNoModelList
+	}
+	res, err := c.send(ctx, call{method: http.MethodGet, endpoint: c.baseURL.JoinPath(c.modelsPath).String()})
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +206,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	return body.Models, nil
 }
 
-func (c *Client) encodeRequest(req Request) ([]byte, error) {
+func (c *Client) encodeRequest(req Request, model string) ([]byte, error) {
 	if req.State == nil {
 		return nil, errors.New("systemone: request has no state")
 	}
@@ -217,21 +227,26 @@ func (c *Client) encodeRequest(req Request) ([]byte, error) {
 		}
 		qs = append(qs, pair{key: id, value: w})
 	}
-	model := req.Model
-	if model == "" {
-		model = c.model
-	}
 	return json.Marshal(requestBody{State: req.State, Model: model, Questions: qs})
+}
+
+// requestID reads the request ID the deployment names, empty when it names
+// none or the response never arrived.
+func (c *Client) requestID(resp *http.Response) string {
+	if resp == nil || c.requestIDHdr == "" {
+		return ""
+	}
+	return resp.Header.Get(c.requestIDHdr)
 }
 
 // call is one API call and the per-request overrides that apply to it.
 type call struct {
-	method  string
-	path    string
-	body    []byte
-	header  http.Header
-	retry   *RetryPolicy
-	timeout time.Duration
+	method   string
+	endpoint string
+	body     []byte
+	header   http.Header
+	retry    *RetryPolicy
+	timeout  time.Duration
 }
 
 func (c *Client) policy(call call) RetryPolicy {
@@ -258,7 +273,6 @@ type rawResponse struct {
 
 // send performs one API call, retrying it when the applicable policy allows.
 func (c *Client) send(ctx context.Context, call call) (rawResponse, error) {
-	endpoint := c.baseURL.JoinPath(call.path).String()
 	policy := c.policy(call)
 	var lastErr error
 	for attempt := 0; ; attempt++ {
@@ -267,7 +281,7 @@ func (c *Client) send(ctx context.Context, call call) (rawResponse, error) {
 				return rawResponse{}, err
 			}
 		}
-		res, err := c.attempt(ctx, endpoint, call, attempt)
+		res, err := c.attempt(ctx, call, attempt)
 		if err == nil {
 			return res, nil
 		}
@@ -285,7 +299,7 @@ func (c *Client) send(ctx context.Context, call call) (rawResponse, error) {
 	}
 }
 
-func (c *Client) attempt(ctx context.Context, endpoint string, call call, attempt int) (rawResponse, error) {
+func (c *Client) attempt(ctx context.Context, call call, attempt int) (rawResponse, error) {
 	if timeout := c.attemptTimeout(call); timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -295,7 +309,7 @@ func (c *Client) attempt(ctx context.Context, endpoint string, call call, attemp
 	if call.body != nil {
 		reader = bytes.NewReader(call.body)
 	}
-	req, err := http.NewRequestWithContext(ctx, call.method, endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, call.method, call.endpoint, reader)
 	if err != nil {
 		return rawResponse{}, fmt.Errorf("systemone: building request: %w", err)
 	}
@@ -315,8 +329,8 @@ func (c *Client) attempt(ctx context.Context, endpoint string, call call, attemp
 	start := c.now()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		err = fmt.Errorf("systemone: %s %s: %w", call.method, endpoint, err)
-		c.logger.attempt(ctx, call.method, endpoint, attempt, start, req, call.body, nil, nil, err)
+		err = fmt.Errorf("systemone: %s %s: %w", call.method, call.endpoint, err)
+		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, nil, nil, "", err)
 		return rawResponse{}, err
 	}
 	defer resp.Body.Close()
@@ -324,12 +338,12 @@ func (c *Client) attempt(ctx context.Context, endpoint string, call call, attemp
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("systemone: reading response: %w", err)
-		c.logger.attempt(ctx, call.method, endpoint, attempt, start, req, call.body, resp, nil, err)
+		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, resp, nil, c.requestID(resp), err)
 		return rawResponse{}, err
 	}
-	c.logger.attempt(ctx, call.method, endpoint, attempt, start, req, call.body, resp, data, nil)
+	id := c.requestID(resp)
+	c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, resp, data, id, nil)
 
-	id := resp.Header.Get(requestIDHdr)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return rawResponse{}, &Error{
 			StatusCode: resp.StatusCode,

@@ -54,6 +54,39 @@ honest: there is no untyped map to fall back to. `t.Value` is a `Team`, so a
 option name, or a level enum borrowed from a different question, is a build
 failure rather than a branch that silently never fires.
 
+## Deployments
+
+Requests go to TypeSafe's hosted API unless a provider says otherwise.
+Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/)
+models take the same requests and return the same answers, so the provider is
+the only thing that changes:
+
+```go
+client, err := systemone.New(
+	systemone.WithProvider(systemone.Cloudflare(accountID)),
+	systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")),
+)
+```
+
+That sends `clef`; set `Request.Model` to `systemone.ClefFlash` for the faster
+one. Clef publishes no model listing, so `Models` returns `ErrNoModelList`, and
+the client does not send Clef's `images` field.
+
+A fine-tuned or self-hosted model is a provider you fill in yourself. A
+`{model}` in `EvaluatePath` is replaced with the model of the request, for
+deployments that name it in the URL:
+
+```go
+systemone.WithProvider(systemone.Provider{
+	BaseURL:      "https://decisions.internal",
+	DefaultModel: "clef-support-ft",
+	EvaluatePath: "/v1/systemone",
+})
+```
+
+`WithBaseURL`, `WithModel`, `WithEvaluatePath`, `WithModelsPath`,
+`WithResultKey` and `WithRequestIDHeader` each override one field of it.
+
 See [`examples/`](examples) for more, including the support-ticket walkthrough
 from the [quick start](https://docs.typesafe.ai/introduction/quickstart)
 written with this SDK.

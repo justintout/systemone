@@ -21,7 +21,7 @@ type Response struct {
 	Model string
 	// Usage is the token count for the request.
 	Usage Usage
-	// RequestID is the x-typesafe-request-id response header, empty if absent.
+	// RequestID is the request ID header the provider names, empty if absent.
 	RequestID string
 
 	answers map[string]json.RawMessage
