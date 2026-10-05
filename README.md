@@ -151,8 +151,9 @@ as text, JSON-encoding a structured one.
 ```go
 client, err := systemone.New(
 	systemone.WithAPIKey(key),          // default: $TYPESAFE_API_KEY
-	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then https://api.typesafe.ai
-	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then jev-latest
+	systemone.WithProvider(provider),   // default: systemone.TypeSafe()
+	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then the provider's
+	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then the provider's
 	systemone.WithHTTPClient(hc),
 	systemone.WithTimeout(30*time.Second), // per attempt
 	systemone.WithRetry(systemone.DefaultRetry()),
@@ -190,7 +191,8 @@ request may be evaluated more than once by the service.
 ### Errors
 
 An unsuccessful response is a `*systemone.Error` carrying the status, the raw
-body, the response headers, and the `x-typesafe-request-id`. Classify it with
+body, the response headers, and the request ID, read from whichever header the
+provider names. Classify it with
 `errors.Is`:
 
 ```go
