@@ -23,6 +23,11 @@ const ModelPlaceholder = "{model}"
 // listing.
 var ErrNoModelList = errors.New("systemone: provider has no model listing")
 
+// ErrImage is returned for an image the client will not send: one with no
+// data, one in a format the models do not read, or any image at all when the
+// provider does not accept them.
+var ErrImage = errors.New("systemone: image")
+
 // Provider is one deployment of the System One API: where it is, how it names
 // the model, and how it wraps the payload. The request body and the answers
 // are the same everywhere, so a Provider is the whole difference between
@@ -49,6 +54,10 @@ type Provider struct {
 	// into [Response.RequestID] and [Error.RequestID]. Empty means the
 	// deployment sends none.
 	RequestIDHeader string
+	// AcceptsImages says the deployment reads [Request.Images], which only a
+	// Clef deployment does. False makes a request carrying images fail before
+	// it is sent rather than at the far end.
+	AcceptsImages bool
 }
 
 // TypeSafe is the hosted System One API at api.typesafe.ai, which the client
@@ -65,8 +74,8 @@ func TypeSafe() Provider {
 
 // Cloudflare is the Clef models on Workers AI, for the account with the given
 // ID. Clef is API-compatible with Jev, but names the model in the URL, wraps
-// the payload in the Cloudflare envelope, and publishes no System One model
-// listing. The API key is a Workers AI token, not a TypeSafe one, so pass it
+// the payload in the Cloudflare envelope, publishes no System One model
+// listing, and reads images. The API key is a Workers AI token, not a TypeSafe one, so pass it
 // with [WithAPIKey].
 //
 // A request for [ClefFlash] is routed to it by name:
@@ -85,6 +94,7 @@ func Cloudflare(accountID string) Provider {
 		EvaluatePath:    "/client/v4/accounts/" + accountID + "/ai/run/@cf/cloudflare/" + ModelPlaceholder,
 		ResultKey:       "result",
 		RequestIDHeader: "Cf-Ray",
+		AcceptsImages:   true,
 	}
 }
 
@@ -107,6 +117,7 @@ func WithProvider(p Provider) ClientOption {
 		c.modelsPath = p.ModelsPath
 		c.resultKey = p.ResultKey
 		c.requestIDHdr = p.RequestIDHeader
+		c.acceptsImages = p.AcceptsImages
 		return nil
 	})
 }

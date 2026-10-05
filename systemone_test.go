@@ -3,6 +3,7 @@ package systemone_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -959,6 +960,77 @@ func TestCloudflareProvider(t *testing.T) {
 	if _, err := plain.Ask(context.Background(), "state", urgent); err == nil {
 		t.Error("want an error for a response missing the result field")
 	}
+}
+
+// pngBytes is enough of a PNG for http.DetectContentType to name it one.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+
+func TestImages(t *testing.T) {
+	img, err := systemone.NewImage(pngBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.ContentType != "image/png" {
+		t.Errorf("ContentType = %q", img.ContentType)
+	}
+
+	t.Run("sent as base64 to a provider that reads them", func(t *testing.T) {
+		rec := &recorder{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec.Body, _ = io.ReadAll(r.Body)
+			fmt.Fprintf(w, `{"result":%s}`, answersJSON)
+		}))
+		t.Cleanup(srv.Close)
+		c, err := systemone.New(
+			systemone.WithAPIKey("cf-token"),
+			systemone.WithProvider(systemone.Cloudflare("acct-1")),
+			systemone.WithBaseURL(srv.URL),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Do(context.Background(), systemone.Request{
+			State: "the checkout page", Questions: []systemone.Question{urgent}, Images: []systemone.Image{img},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := `[{"content_type":"image/png","base64":"` + base64.StdEncoding.EncodeToString(pngBytes) + `"}]`
+		if got := rec.field(t, "images"); got != want {
+			t.Errorf("images = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("refused before sending when the provider reads none", func(t *testing.T) {
+		c, rec := stub(t, answersJSON)
+		_, err := c.Do(context.Background(), systemone.Request{
+			State: "state", Questions: []systemone.Question{urgent}, Images: []systemone.Image{img},
+		})
+		if !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("err = %v, want ErrImage", err)
+		}
+		if rec.Calls.Load() != 0 {
+			t.Errorf("calls = %d, want the request never sent", rec.Calls.Load())
+		}
+	})
+
+	t.Run("rejected images", func(t *testing.T) {
+		if _, err := systemone.NewImage(nil); !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("empty data err = %v, want ErrImage", err)
+		}
+		if _, err := systemone.NewImage([]byte("GIF89a and then some")); !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("gif err = %v, want ErrImage", err)
+		}
+		// An Image built by hand rather than through NewImage is checked when
+		// it is encoded, so a half-filled one cannot reach the wire.
+		c, _ := stub(t, answersJSON, systemone.WithAcceptsImages(true))
+		_, err := c.Do(context.Background(), systemone.Request{
+			State: "state", Questions: []systemone.Question{urgent},
+			Images: []systemone.Image{{ContentType: "image/png"}},
+		})
+		if !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("err = %v, want ErrImage", err)
+		}
+	})
 }
 
 func TestMalformedResponses(t *testing.T) {

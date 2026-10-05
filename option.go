@@ -118,6 +118,16 @@ func WithRequestIDHeader(name string) ClientOption {
 	})
 }
 
+// WithAcceptsImages says whether the deployment reads [Request.Images], which
+// only a Clef deployment does. It overrides the provider's own answer, for a
+// fine-tuned or self-hosted Clef built from a Provider that does not say so.
+func WithAcceptsImages(ok bool) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		c.acceptsImages = ok
+		return nil
+	})
+}
+
 // WithHTTPClient sets the HTTP client used for every request. Use it to
 // configure transport, proxies, or connection pooling. The client's own Timeout
 // field, if set, bounds the whole call including retries, which is separate

@@ -69,8 +69,25 @@ client, err := systemone.New(
 ```
 
 That sends `clef`; set `Request.Model` to `systemone.ClefFlash` for the faster
-one. Clef publishes no model listing, so `Models` returns `ErrNoModelList`, and
-the client does not send Clef's `images` field.
+one. Clef publishes no model listing, so `Models` returns `ErrNoModelList`.
+
+Clef reads images, which Jev does not. They go in `Request.Images`, ahead of the
+state, and `NewImage` reads the content type from the bytes:
+
+```go
+data, err := os.ReadFile("checkout.png")
+img, err := systemone.NewImage(data) // PNG, JPEG or WebP
+
+res, err := client.Do(ctx, systemone.Request{
+	State:     "A customer sent this screenshot of the checkout page.",
+	Questions: []systemone.Question{broken, severity},
+	Images:    []systemone.Image{img},
+})
+```
+
+A provider says whether its deployment reads them, so images sent to Jev fail
+before the request leaves rather than at the far end. Cloudflare's limits — four
+images, 4 MiB and 16 megapixels each — are enforced by the deployment, not here.
 
 A fine-tuned or self-hosted model is a provider you fill in yourself. A
 `{model}` in `EvaluatePath` is replaced with the model of the request, for
@@ -85,7 +102,8 @@ systemone.WithProvider(systemone.Provider{
 ```
 
 `WithBaseURL`, `WithModel`, `WithEvaluatePath`, `WithModelsPath`,
-`WithResultKey` and `WithRequestIDHeader` each override one field of it.
+`WithResultKey`, `WithRequestIDHeader` and `WithAcceptsImages` each override one
+field of it.
 
 See [`examples/`](examples) for more, including the support-ticket walkthrough
 from the [quick start](https://docs.typesafe.ai/introduction/quickstart)

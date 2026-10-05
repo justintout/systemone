@@ -27,15 +27,16 @@ type Client struct {
 	model   string
 	header  http.Header
 	// Paths, envelope and request ID header of the deployment. See [Provider].
-	evaluatePath string
-	modelsPath   string
-	resultKey    string
-	requestIDHdr string
-	retry        RetryPolicy
-	timeout      time.Duration
-	userAgent    string
-	logger       logger
-	now          func() time.Time
+	evaluatePath  string
+	modelsPath    string
+	resultKey     string
+	requestIDHdr  string
+	acceptsImages bool
+	retry         RetryPolicy
+	timeout       time.Duration
+	userAgent     string
+	logger        logger
+	now           func() time.Time
 }
 
 // New builds a client. Without options it reads the API key from APIKeyEnv, the
@@ -91,6 +92,9 @@ type Request struct {
 	// Questions are asked in one call and answered in parallel. They cannot see
 	// one another's answers.
 	Questions []Question
+	// Images are read before the state. They are a Clef extension to the API,
+	// so the provider has to accept them; see [Provider.AcceptsImages].
+	Images []Image
 	// Model overrides the client default for this request.
 	Model string
 	// Header adds or replaces headers for this request. Authorization, Accept,
@@ -107,9 +111,10 @@ type Request struct {
 }
 
 type requestBody struct {
-	State     any    `json:"state"`
-	Model     string `json:"model"`
-	Questions pairs  `json:"questions"`
+	State     any     `json:"state"`
+	Model     string  `json:"model"`
+	Questions pairs   `json:"questions"`
+	Images    []Image `json:"images,omitempty"`
 }
 
 // Ask evaluates state against questions using the client's default model. It is
@@ -213,6 +218,9 @@ func (c *Client) encodeRequest(req Request, model string) ([]byte, error) {
 	if len(req.Questions) == 0 {
 		return nil, errors.New("systemone: request has no questions")
 	}
+	if len(req.Images) > 0 && !c.acceptsImages {
+		return nil, fmt.Errorf("%w: the provider accepts none; see Provider.AcceptsImages", ErrImage)
+	}
 	qs := make(pairs, 0, len(req.Questions))
 	seen := make(map[string]bool, len(req.Questions))
 	for _, q := range req.Questions {
@@ -227,7 +235,7 @@ func (c *Client) encodeRequest(req Request, model string) ([]byte, error) {
 		}
 		qs = append(qs, pair{key: id, value: w})
 	}
-	return json.Marshal(requestBody{State: req.State, Model: model, Questions: qs})
+	return json.Marshal(requestBody{State: req.State, Model: model, Questions: qs, Images: req.Images})
 }
 
 // requestID reads the request ID the deployment names, empty when it names
