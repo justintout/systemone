@@ -43,7 +43,7 @@ func (l logger) enabled(level slog.Level) bool {
 
 // attempt logs one HTTP attempt once it has finished. At info it is a summary
 // line; at debug it also carries headers and bodies.
-func (l logger) attempt(ctx context.Context, method, endpoint string, attempt int, start time.Time, req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, err error) {
+func (l logger) attempt(ctx context.Context, method, endpoint string, attempt int, start time.Time, req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, requestID string, err error) {
 	if !l.enabled(slog.LevelInfo) {
 		return
 	}
@@ -60,8 +60,8 @@ func (l logger) attempt(ctx context.Context, method, endpoint string, attempt in
 		level = slog.LevelWarn
 	case resp != nil:
 		attrs = append(attrs, slog.Int("status", resp.StatusCode))
-		if id := resp.Header.Get(requestIDHdr); id != "" {
-			attrs = append(attrs, slog.String("request_id", id))
+		if requestID != "" {
+			attrs = append(attrs, slog.String("request_id", requestID))
 		}
 		if resp.StatusCode >= 400 {
 			level = slog.LevelWarn

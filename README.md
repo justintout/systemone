@@ -54,6 +54,57 @@ honest: there is no untyped map to fall back to. `t.Value` is a `Team`, so a
 option name, or a level enum borrowed from a different question, is a build
 failure rather than a branch that silently never fires.
 
+## Deployments
+
+Requests go to TypeSafe's hosted API unless a provider says otherwise.
+Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/)
+models take the same requests and return the same answers, so the provider is
+the only thing that changes:
+
+```go
+client, err := systemone.New(
+	systemone.WithProvider(systemone.Cloudflare(accountID)),
+	systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")),
+)
+```
+
+That sends `clef`; set `Request.Model` to `systemone.ClefFlash` for the faster
+one. Clef publishes no model listing, so `Models` returns `ErrNoModelList`.
+
+Clef reads images, which Jev does not. They go in `Request.Images`, ahead of the
+state, and `NewImage` reads the content type from the bytes:
+
+```go
+data, err := os.ReadFile("checkout.png")
+img, err := systemone.NewImage(data) // PNG, JPEG or WebP
+
+res, err := client.Do(ctx, systemone.Request{
+	State:     "A customer sent this screenshot of the checkout page.",
+	Questions: []systemone.Question{broken, severity},
+	Images:    []systemone.Image{img},
+})
+```
+
+A provider says whether its deployment reads them, so images sent to Jev fail
+before the request leaves rather than at the far end. Cloudflare's limits — four
+images, 4 MiB and 16 megapixels each — are enforced by the deployment, not here.
+
+A fine-tuned or self-hosted model is a provider you fill in yourself. A
+`{model}` in `EvaluatePath` is replaced with the model of the request, for
+deployments that name it in the URL:
+
+```go
+systemone.WithProvider(systemone.Provider{
+	BaseURL:      "https://decisions.internal",
+	DefaultModel: "clef-support-ft",
+	EvaluatePath: "/v1/systemone",
+})
+```
+
+`WithBaseURL`, `WithModel`, `WithEvaluatePath`, `WithModelsPath`,
+`WithResultKey`, `WithRequestIDHeader` and `WithAcceptsImages` each override one
+field of it.
+
 See [`examples/`](examples) for more, including the support-ticket walkthrough
 from the [quick start](https://docs.typesafe.ai/introduction/quickstart)
 written with this SDK.
@@ -100,8 +151,9 @@ as text, JSON-encoding a structured one.
 ```go
 client, err := systemone.New(
 	systemone.WithAPIKey(key),          // default: $TYPESAFE_API_KEY
-	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then https://api.typesafe.ai
-	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then jev-latest
+	systemone.WithProvider(provider),   // default: systemone.TypeSafe()
+	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then the provider's
+	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then the provider's
 	systemone.WithHTTPClient(hc),
 	systemone.WithTimeout(30*time.Second), // per attempt
 	systemone.WithRetry(systemone.DefaultRetry()),
@@ -139,7 +191,8 @@ request may be evaluated more than once by the service.
 ### Errors
 
 An unsuccessful response is a `*systemone.Error` carrying the status, the raw
-body, the response headers, and the `x-typesafe-request-id`. Classify it with
+body, the response headers, and the request ID, read from whichever header the
+provider names. Classify it with
 `errors.Is`:
 
 ```go

@@ -32,6 +32,12 @@
 // See https://docs.typesafe.ai for the concepts behind state, questions,
 // probabilities, and confidence.
 //
+// Requests go to TypeSafe's hosted API unless a [Provider] says otherwise.
+// Cloudflare's Clef models answer the same requests with the same answers, so
+// [Cloudflare] is all that changes to send questions to them, and a Provider
+// written by hand reaches a fine-tuned or self-hosted model. Clef also reads
+// images, which travel in [Request.Images].
+//
 // This is an unofficial, community-maintained client, not built, endorsed, or
 // supported by TypeSafe.
 package systemone

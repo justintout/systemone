@@ -3,6 +3,7 @@ package systemone_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,7 +175,7 @@ func TestRequestTransport(t *testing.T) {
 		{"auth", req.Header.Get("Authorization"), "Bearer test-key"},
 		{"content type", req.Header.Get("Content-Type"), "application/json"},
 		{"state", rec.field(t, "state"), `"state"`},
-		{"model", rec.field(t, "model"), `"` + systemone.DefaultModel + `"`},
+		{"model", rec.field(t, "model"), `"` + systemone.JevLatest + `"`},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
@@ -650,6 +651,10 @@ func TestClientOptions(t *testing.T) {
 			{"relative base url", systemone.WithBaseURL("/v1")},
 			{"unparseable base url", systemone.WithBaseURL("http://a b")},
 			{"empty model", systemone.WithModel("")},
+			{"empty evaluate path", systemone.WithEvaluatePath("")},
+			{"provider without a base url", systemone.WithProvider(systemone.Provider{DefaultModel: "m", EvaluatePath: "/p"})},
+			{"provider without a model", systemone.WithProvider(systemone.Provider{BaseURL: "https://example.test", EvaluatePath: "/p"})},
+			{"provider without an evaluate path", systemone.WithProvider(systemone.Provider{BaseURL: "https://example.test", DefaultModel: "m"})},
 			{"nil http client", systemone.WithHTTPClient(nil)},
 			{"empty header name", systemone.WithHeader("", "v")},
 			{"negative timeout", systemone.WithTimeout(-time.Second)},
@@ -893,6 +898,139 @@ func TestIncompleteAnswersAreRejected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Clef on Workers AI sends and receives the same payload as Jev, so a provider
+// only has to move the model into the URL, unwrap the envelope, and say that
+// there is no model listing.
+func TestCloudflareProvider(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.Calls.Add(1)
+		rec.Body, _ = io.ReadAll(r.Body)
+		rec.Request = r
+		w.Header().Set("Cf-Ray", "9d1f2c3a4b5e6f70-ORD")
+		fmt.Fprintf(w, `{"result":%s,"success":true,"errors":[],"messages":[]}`, answersJSON)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := systemone.New(
+		systemone.WithAPIKey("cf-token"),
+		systemone.WithProvider(systemone.Cloudflare("acct-1")),
+		systemone.WithBaseURL(srv.URL),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Model() != systemone.Clef {
+		t.Errorf("model = %q, want %q", c.Model(), systemone.Clef)
+	}
+
+	res, err := c.Do(context.Background(), systemone.Request{
+		State: "Checkout has been failing for an hour.", Questions: []systemone.Question{urgent},
+		Model: systemone.ClefFlash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef-flash"; rec.Request.URL.Path != want {
+		t.Errorf("path = %q, want %q", rec.Request.URL.Path, want)
+	}
+	// The model stays in the body as well, which is what Clef validates.
+	if got := rec.field(t, "model"); got != `"clef-flash"` {
+		t.Errorf("body model = %s", got)
+	}
+	if res.RequestID != "9d1f2c3a4b5e6f70-ORD" {
+		t.Errorf("RequestID = %q", res.RequestID)
+	}
+	u, err := urgent.From(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Value != 0.95 {
+		t.Errorf("noul = %v", u.Value)
+	}
+	if _, err := c.Models(context.Background()); !errors.Is(err, systemone.ErrNoModelList) {
+		t.Errorf("Models err = %v, want ErrNoModelList", err)
+	}
+
+	// A reply that is not in the envelope the provider names is an error, not an
+	// empty set of answers.
+	plain, _ := stub(t, answersJSON, systemone.WithResultKey("result"))
+	if _, err := plain.Ask(context.Background(), "state", urgent); err == nil {
+		t.Error("want an error for a response missing the result field")
+	}
+}
+
+// pngBytes is enough of a PNG for http.DetectContentType to name it one.
+var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+
+func TestImages(t *testing.T) {
+	img, err := systemone.NewImage(pngBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.ContentType != "image/png" {
+		t.Errorf("ContentType = %q", img.ContentType)
+	}
+
+	t.Run("sent as base64 to a provider that reads them", func(t *testing.T) {
+		rec := &recorder{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec.Body, _ = io.ReadAll(r.Body)
+			fmt.Fprintf(w, `{"result":%s}`, answersJSON)
+		}))
+		t.Cleanup(srv.Close)
+		c, err := systemone.New(
+			systemone.WithAPIKey("cf-token"),
+			systemone.WithProvider(systemone.Cloudflare("acct-1")),
+			systemone.WithBaseURL(srv.URL),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Do(context.Background(), systemone.Request{
+			State: "the checkout page", Questions: []systemone.Question{urgent}, Images: []systemone.Image{img},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := `[{"content_type":"image/png","base64":"` + base64.StdEncoding.EncodeToString(pngBytes) + `"}]`
+		if got := rec.field(t, "images"); got != want {
+			t.Errorf("images = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("refused before sending when the provider reads none", func(t *testing.T) {
+		c, rec := stub(t, answersJSON)
+		_, err := c.Do(context.Background(), systemone.Request{
+			State: "state", Questions: []systemone.Question{urgent}, Images: []systemone.Image{img},
+		})
+		if !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("err = %v, want ErrImage", err)
+		}
+		if rec.Calls.Load() != 0 {
+			t.Errorf("calls = %d, want the request never sent", rec.Calls.Load())
+		}
+	})
+
+	t.Run("rejected images", func(t *testing.T) {
+		if _, err := systemone.NewImage(nil); !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("empty data err = %v, want ErrImage", err)
+		}
+		if _, err := systemone.NewImage([]byte("GIF89a and then some")); !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("gif err = %v, want ErrImage", err)
+		}
+		// An Image built by hand rather than through NewImage is checked when
+		// it is encoded, so a half-filled one cannot reach the wire.
+		c, _ := stub(t, answersJSON, systemone.WithAcceptsImages(true))
+		_, err := c.Do(context.Background(), systemone.Request{
+			State: "state", Questions: []systemone.Question{urgent},
+			Images: []systemone.Image{{ContentType: "image/png"}},
+		})
+		if !errors.Is(err, systemone.ErrImage) {
+			t.Errorf("err = %v, want ErrImage", err)
+		}
+	})
 }
 
 func TestMalformedResponses(t *testing.T) {

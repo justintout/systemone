@@ -29,7 +29,7 @@ var (
 type Error struct {
 	// StatusCode is the HTTP status code.
 	StatusCode int
-	// RequestID is the x-typesafe-request-id response header, empty if absent.
+	// RequestID is the request ID header the provider names, empty if absent.
 	RequestID string
 	// Body is the raw response body, which describes the offending field on a
 	// 422. It is not parsed, because the API does not contract its shape.

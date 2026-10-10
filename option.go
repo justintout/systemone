@@ -18,12 +18,8 @@ const (
 	LogLevelEnv     = "TYPESAFE_LOG_LEVEL"
 )
 
-// Client defaults.
-const (
-	DefaultBaseURL = "https://api.typesafe.ai"
-	DefaultModel   = "jev-latest"
-	DefaultTimeout = 10 * time.Second
-)
+// DefaultTimeout bounds one attempt unless [WithTimeout] says otherwise.
+const DefaultTimeout = 10 * time.Second
 
 // ErrNoAPIKey is returned by [New] when no API key is given and APIKeyEnv is
 // unset.
@@ -68,13 +64,66 @@ func WithBaseURL(rawURL string) ClientOption {
 }
 
 // WithModel sets the model used when a request does not name one, overriding
-// DefaultModelEnv. See https://docs.typesafe.ai/models.
+// DefaultModelEnv and the provider default. See
+// https://docs.typesafe.ai/models.
 func WithModel(model string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		if model == "" {
 			return errors.New("systemone: model is empty")
 		}
 		c.model = model
+		return nil
+	})
+}
+
+// WithEvaluatePath sets the path an evaluation is posted to, appended to the
+// base URL. A [ModelPlaceholder] in it is replaced with the model of the
+// request. Use it to reach a fine-tuned or self-hosted model whose path is not
+// the one its [Provider] names.
+func WithEvaluatePath(path string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		if path == "" {
+			return errors.New("systemone: evaluate path is empty")
+		}
+		c.evaluatePath = path
+		return nil
+	})
+}
+
+// WithModelsPath sets the path [Client.Models] reads. An empty path says the
+// deployment publishes no listing, and Models then returns [ErrNoModelList].
+func WithModelsPath(path string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		c.modelsPath = path
+		return nil
+	})
+}
+
+// WithResultKey sets the response field the payload is wrapped in, for a
+// deployment that wraps it in an envelope. An empty key says the body is the
+// payload.
+func WithResultKey(key string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		c.resultKey = key
+		return nil
+	})
+}
+
+// WithRequestIDHeader sets the response header read into [Response.RequestID]
+// and [Error.RequestID]. An empty name says the deployment sends none.
+func WithRequestIDHeader(name string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		c.requestIDHdr = name
+		return nil
+	})
+}
+
+// WithAcceptsImages says whether the deployment reads [Request.Images], which
+// only a Clef deployment does. It overrides the provider's own answer, for a
+// fine-tuned or self-hosted Clef built from a Provider that does not say so.
+func WithAcceptsImages(ok bool) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		c.acceptsImages = ok
 		return nil
 	})
 }
