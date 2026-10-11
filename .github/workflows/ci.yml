@@ -52,7 +52,7 @@ jobs:
       # Runs go vet, staticcheck, errcheck, unused and gofmt; see .golangci.yml.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.2
+          version: v2.14.0
 
       - name: go mod tidy is a no-op
         run: |
