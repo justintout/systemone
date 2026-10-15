@@ -19,8 +19,8 @@ const DefaultTimeout = 10 * time.Second
 var ErrNoAPIKey = errors.New("systemone: no API key")
 
 // ClientOption configures a [Client]. The constructors in packages jev, clef
-// and decisions take the same options, applied after their own defaults, so an option given there
-// overrides the deployment's setting.
+// and foundry take the same options, applied after their own defaults, so an
+// option given there overrides the deployment's setting.
 type ClientOption interface {
 	apply(*Client) error
 }

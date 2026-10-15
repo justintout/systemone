@@ -37,7 +37,7 @@
 // The client depends on the deployment. Package jev reaches TypeSafe's hosted
 // Jev models and package clef reaches Cloudflare's Clef models; each adds its
 // deployment's extensions to the API. Each deployment sends images its own
-// way, so they are types of package jev and package clef. Package decisions
+// way, so they are types of package jev and package clef. Package foundry
 // reaches Microsoft-Decision-1 in Microsoft Foundry, which serves the base API
 // alone. [Client] in this package speaks the base API, for Foundry and for any
 // server that implements it. Every client takes the same questions, returns
