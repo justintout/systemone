@@ -120,7 +120,7 @@ the request's context limits to 262k tokens at some cost in speed and accuracy.
 `clef.New` takes the Workers AI account ID and a Workers AI token:
 
 ```go
-client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")))
+client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_API_TOKEN")))
 ```
 
 That sends `clef`; set `Request.Model` to `clef.Flash` for the faster one. Clef
