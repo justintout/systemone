@@ -36,7 +36,8 @@
 // The client depends on the deployment. Package jev reaches TypeSafe's hosted
 // Jev models and package clef reaches Cloudflare's Clef models; each adds its
 // deployment's extensions to the API. [Client] in this package speaks the base
-// API alone, for a server that implements it itself. All three take the same
+// API alone, for a server that implements it itself. Each deployment sends
+// images its own way, so they are types of package jev and package clef. All three take the same
 // questions, return the same [Response], and satisfy [Asker].
 //
 // This is an unofficial, community-maintained client, not built, endorsed, or

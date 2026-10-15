@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -81,8 +82,14 @@ func (c *Client) Ask(ctx context.Context, state any, questions ...systemone.Ques
 	return c.Do(ctx, Request{State: state, Questions: questions})
 }
 
-// Do sends one evaluation request.
+// Do sends one evaluation request. A [systemone.Box] question fails it before
+// it is sent, since Clef does not answer them.
 func (c *Client) Do(ctx context.Context, req Request) (*systemone.Response, error) {
+	for _, q := range req.Questions {
+		if bridge.Kind(q) == "box" {
+			return nil, &systemone.QuestionError{QuestionID: q.ID(), Err: errors.New("box questions are not answered by Clef")}
+		}
+	}
 	var ext bridge.Extension
 	if len(req.Images) > 0 {
 		ext.Fields = map[string]any{"images": req.Images}

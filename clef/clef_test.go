@@ -153,3 +153,16 @@ func TestImages(t *testing.T) {
 		}
 	})
 }
+
+func TestBoxIsRefused(t *testing.T) {
+	c, rec := stub(t)
+	mug := systemone.NewBox("mug", "the coffee mug in `photo`")
+	_, err := c.Ask(context.Background(), "state", urgent, mug)
+	var qerr *systemone.QuestionError
+	if !errors.As(err, &qerr) || qerr.QuestionID != "mug" {
+		t.Errorf("err = %v, want a QuestionError for mug", err)
+	}
+	if rec.Calls != 0 {
+		t.Errorf("calls = %d, want the request never sent", rec.Calls)
+	}
+}

@@ -10,7 +10,22 @@ import "context"
 type Extension struct {
 	// Fields are extra top-level fields of the request body.
 	Fields map[string]any
+	// Check inspects the encoded state and questions before Fields are added
+	// and before anything is sent. Without one, a body carrying an
+	// ImageRefPrefix is refused, since only a deployment that sends assets
+	// can resolve it.
+	Check func(body []byte) error
 }
+
+// ImageRefPrefix starts every reference a jev.Image encodes as. It lets the
+// client find references in an encoded body, so an image placed in a request
+// but never attached fails before it is sent instead of reaching the model as
+// a meaningless string.
+const ImageRefPrefix = "systemone-image-"
+
+// Kind returns the wire type of a systemone.Question, such as "box". Package
+// systemone sets it.
+var Kind func(question any) string
 
 var do any
 

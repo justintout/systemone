@@ -122,6 +122,7 @@ func init() {
 	bridge.RegisterDo(func(ctx context.Context, c *Client, req Request, ext bridge.Extension) (*Response, error) {
 		return c.do(ctx, req, ext)
 	})
+	bridge.Kind = func(q any) string { return q.(Question).wireType() }
 }
 
 // Ask evaluates state against questions using the client's default model. It is
@@ -243,11 +244,30 @@ func encodeRequest(req Request, model string, ext bridge.Extension) ([]byte, err
 		}
 		qs = append(qs, pair{key: id, value: w})
 	}
-	body := pairs{{key: "state", value: req.State}, {key: "model", value: model}, {key: "questions", value: qs}}
-	for _, k := range slices.Sorted(maps.Keys(ext.Fields)) {
-		body = append(body, pair{key: k, value: ext.Fields[k]})
+	body, err := json.Marshal(pairs{{key: "state", value: req.State}, {key: "model", value: model}, {key: "questions", value: qs}})
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(body)
+	switch {
+	case ext.Check != nil:
+		err = ext.Check(body)
+	case bytes.Contains(body, []byte(bridge.ImageRefPrefix)):
+		err = fmt.Errorf("%w: a jev.Image can only be sent by a jev client", ErrImage)
+	}
+	if err != nil || len(ext.Fields) == 0 {
+		return body, err
+	}
+	extra := make(pairs, 0, len(ext.Fields))
+	for _, k := range slices.Sorted(maps.Keys(ext.Fields)) {
+		extra = append(extra, pair{key: k, value: ext.Fields[k]})
+	}
+	fields, err := json.Marshal(extra)
+	if err != nil {
+		return nil, err
+	}
+	// Both are JSON objects, so the extra fields splice in before the closing
+	// brace and the state is encoded once.
+	return append(append(body[:len(body)-1], ','), fields[1:]...), nil
 }
 
 // requestID reads the request ID the deployment names, empty when it names

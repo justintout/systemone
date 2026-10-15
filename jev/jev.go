@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,21 @@ const BaseURL = "https://api.typesafe.ai"
 const (
 	// Latest is the most recent stable release, and the default.
 	Latest = "jev-latest"
+	// Preview is the most recent release, stable or not. [systemone.Box]
+	// questions need it while Jev 1.14 is a preview.
+	Preview = "jev-preview"
+)
+
+// Headers that turn on TypeSafe's experimental features for one request.
+// [Client.Do] sets them; they are exported for logs and proxies.
+const (
+	// ImagesHeader turns on images and Box questions. Do sets it on a request
+	// with an image or a Box question.
+	ImagesHeader = "TypeSafe-Danger-Zone-Images"
+	// LongContextHeader raises both context limits to 262k tokens, at some
+	// cost in speed and accuracy. Do sets it when [Request.LongContext] is
+	// true.
+	LongContextHeader = "TypeSafe-Danger-Zone-Long-Context"
 )
 
 // Environment variables [New] reads. The names match TypeSafe's own SDKs.
@@ -102,15 +118,23 @@ func (c *Client) Models(ctx context.Context) ([]systemone.Model, error) {
 	return c.base.Models(ctx)
 }
 
-// Request is one evaluation. Its fields mean what they do in
-// [systemone.Request].
+// Request is one evaluation. Its fields other than Images and LongContext mean
+// what they do in [systemone.Request].
 type Request struct {
 	State     any
 	Questions []systemone.Question
-	Model     string
-	Header    http.Header
-	Retry     *systemone.RetryPolicy
-	Timeout   time.Duration
+	// Images lists every [Image] placed in the state, instructions or
+	// criteria. A request that places an image without listing it, or lists
+	// one it never places, fails before it is sent.
+	Images []Image
+	// LongContext raises the request's context limits to 262k tokens. It is
+	// slower and less accurate than staying within the defaults, so turn it
+	// on only for requests that need it. See https://docs.typesafe.ai/models.
+	LongContext bool
+	Model       string
+	Header      http.Header
+	Retry       *systemone.RetryPolicy
+	Timeout     time.Duration
 }
 
 // Ask evaluates state against questions using the client's default model.
@@ -118,14 +142,40 @@ func (c *Client) Ask(ctx context.Context, state any, questions ...systemone.Ques
 	return c.Do(ctx, Request{State: state, Questions: questions})
 }
 
-// Do sends one evaluation request.
+// Do sends one evaluation request. It turns on images for a request with an
+// image or a [systemone.Box] question, which TypeSafe requires and which is
+// otherwise a 400.
 func (c *Client) Do(ctx context.Context, req Request) (*systemone.Response, error) {
+	listed, err := assets(req.Images)
+	if err != nil {
+		return nil, err
+	}
+	ext := bridge.Extension{Check: func(body []byte) error { return checkRefs(body, listed) }}
+	if len(listed) > 0 {
+		ext.Fields = map[string]any{"assets": listed}
+	}
+	images := len(listed) > 0 || slices.ContainsFunc(req.Questions, func(q systemone.Question) bool { return bridge.Kind(q) == "box" })
+	header := req.Header
+	if images || req.LongContext {
+		// The caller's header may be shared across requests, so set ours on a
+		// copy.
+		header = req.Header.Clone()
+		if header == nil {
+			header = make(http.Header)
+		}
+		if images {
+			header.Set(ImagesHeader, "true")
+		}
+		if req.LongContext {
+			header.Set(LongContextHeader, "true")
+		}
+	}
 	return bridge.Do[*systemone.Response](ctx, c.base, systemone.Request{
 		State:     req.State,
 		Questions: req.Questions,
 		Model:     req.Model,
-		Header:    req.Header,
+		Header:    header,
 		Retry:     req.Retry,
 		Timeout:   req.Timeout,
-	}, bridge.Extension{})
+	}, ext)
 }

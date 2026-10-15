@@ -67,16 +67,57 @@ client takes the same `systemone.Question` values and returns the same
 | `systemone` | A server that implements the base API itself |
 
 `jev.New` reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
-`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`. `clef.New` takes the Workers
-AI account ID and a Workers AI token:
+`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`.
+
+### Jev images
+
+An image goes anywhere text can: the state, a question's instructions, or its
+criteria. A `jev.Image` placed as a value becomes the image there, and `Ref()`
+writes it into a sentence. Every image placed in the request is also listed in
+`Images`, which uploads it once:
+
+```go
+door, err := jev.NewImage(doorJPG) // PNG or JPEG
+badge, err := jev.NewImage(badgeJPG)
+
+var (
+	match = systemone.NewNoul("match",
+		"Is the person in `door` the person in this badge photo: "+badge.Ref()+"?")
+	where = systemone.NewBox("where", "the person in `door`")
+)
+
+res, err := client.Do(ctx, jev.Request{
+	State:     map[string]any{"door": door},
+	Questions: []systemone.Question{match, where},
+	Images:    []jev.Image{door, badge},
+	Model:     jev.Preview, // Box needs Jev 1.14
+})
+b, err := where.From(res) // systemone.BoxAnswer
+crop := b.Rect(width, height)
+```
+
+A request that places an image without listing it, or lists one it never
+places, fails before it is sent. The client sets the
+`TypeSafe-Danger-Zone-Images` header TypeSafe requires on any request with an
+image or a Box question. Images and Box are experimental at TypeSafe, and
+[their limits](https://docs.typesafe.ai/images#limits) are enforced there, not
+here.
+
+`Request.LongContext` sets `TypeSafe-Danger-Zone-Long-Context`, which raises
+the request's context limits to 262k tokens at some cost in speed and accuracy.
+
+### Clef
+
+`clef.New` takes the Workers AI account ID and a Workers AI token:
 
 ```go
 client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")))
 ```
 
 That sends `clef`; set `Request.Model` to `clef.Flash` for the faster one. Clef
-reads images placed before the state, and `clef.NewImage` reads the content
-type from the bytes:
+does not answer Box questions. It reads images placed before the state rather
+than referenced from it, and `clef.NewImage` reads the content type from the
+bytes:
 
 ```go
 data, err := os.ReadFile("checkout.png")
@@ -92,6 +133,8 @@ res, err := client.Do(ctx, clef.Request{
 Cloudflare's limits (four images, 4 MiB and 16 megapixels each) are enforced by
 the deployment, not here. A fine-tuned or self-hosted Clef is `clef.New` with
 `systemone.WithBaseURL` and `systemone.WithEvaluatePath`.
+
+### Your own server
 
 A server that implements only the base API has no default, so name it:
 
@@ -118,6 +161,7 @@ written with this SDK.
 | `NewChoice[T ~string]` | `ChoiceAnswer[T]`: `Value`, `Probabilities`, `Confidence` | One of a defined set |
 | `NewNoul` | `NoulAnswer`: `Value`, the probability of yes | Whether a condition holds |
 | `NewScore[T ~int]` | `ScoreAnswer[T]`: `Value`, `Level`, `Legend`, `Probabilities`, `Confidence` | Degree along ordered levels |
+| `NewBox` | `BoxAnswer`: `Top`, `Bottom`, `Left`, `Right`, `Confidence` | Where something is in an image (Jev 1.14) |
 
 Instructions and every criterion take a string or any value that encodes to a
 JSON object or array, so a question can carry named data it refers to by
