@@ -6,6 +6,22 @@
 //	client, err := jev.New() // reads TYPESAFE_API_KEY
 //	res, err := client.Ask(ctx, ticket, team, urgent)
 //	t, err := team.From(res)
+//
+// Jev also reads images and answers [Box] questions, which find where
+// something is in an image. Only Jev answers a Box, so a Box is not a
+// [systemone.Question]: it travels in [Request.Boxes] rather than with the
+// other questions, and [Client.Ask] cannot send one. Handing a Box to another
+// deployment's client is a build failure rather than a rejected request.
+//
+//	where := jev.NewBox("where", "the person in `door`")
+//	res, err := client.Do(ctx, jev.Request{
+//		State:     map[string]any{"door": door},
+//		Questions: []systemone.Question{present},
+//		Boxes:     []*jev.Box{where},
+//		Images:    []jev.Image{door},
+//		Model:     jev.Preview,
+//	})
+//	b, err := where.From(res)
 package jev
 
 import (
