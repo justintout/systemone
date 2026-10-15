@@ -50,8 +50,27 @@ jobs:
     needs: guard
     uses: ./.github/workflows/ci.yml
 
-  release:
+  # Requests to the live deployments, before the tag exists. It checks that
+  # each kind of request flows end to end and its answers decode, not what the
+  # models answer.
+  live:
     needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Live API tests
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: go test -tags live -count=1 -run TestLive -v ./jev ./clef
+
+  release:
+    needs: [verify, live]
     runs-on: ubuntu-latest
     permissions:
       contents: write

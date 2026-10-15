@@ -1,5 +1,9 @@
 version: "2"
 
+run:
+  # Lint the live API tests too.
+  build-tags: [live]
+
 linters:
   # errcheck, govet, ineffassign, staticcheck and unused are on by default.
   enable:
