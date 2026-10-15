@@ -12,13 +12,15 @@ import (
 // by backticked path. See https://docs.typesafe.ai/primitives/advanced.
 type Content = any
 
-// Question is one typed question in a request. The three implementations are
-// [Choice], [Score] and [Noul]; the interface is closed.
+// Question is one typed question in a request. The implementations are
+// [Choice], [Score], [Noul] and [Box]; the interface is closed.
 type Question interface {
 	// ID is the key the question is sent under and the answer comes back under.
 	ID() string
 	// encode returns the wire form, or the error collected while building it.
 	encode() (any, error)
+	// wireType is the question's type field, such as "noul".
+	wireType() string
 }
 
 // QuestionError reports a question that cannot be sent as built.
@@ -53,6 +55,8 @@ type question struct {
 }
 
 func (q *question) ID() string { return q.id }
+
+func (q *question) wireType() string { return q.kind }
 
 // fail records the first build error. Later errors are dropped so the message
 // points at the root cause.
