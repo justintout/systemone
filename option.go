@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // DefaultTimeout bounds one attempt unless [WithTimeout] says otherwise.
@@ -122,7 +124,7 @@ func WithHTTPClient(hc *http.Client) ClientOption {
 
 // WithHeader adds a header sent on every request. A [Request] header of the
 // same name replaces it for that request, except for Authorization, Accept,
-// Content-Type and User-Agent, which the client always sets itself.
+// Content-Type, Content-Encoding and User-Agent, which the client sets itself.
 // [WithUserAgent] changes the last of those.
 func WithHeader(key, value string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
@@ -185,6 +187,30 @@ func WithLogger(log *slog.Logger) ClientOption {
 func WithLogLevel(level slog.Level) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		c.logger.level = level
+		return nil
+	})
+}
+
+// compressionThreshold is the smallest body [WithCompression] compresses,
+// below which the saving does not cover the frame. It matches TypeSafe's SDKs.
+const compressionThreshold = 1024
+
+// WithCompression compresses request bodies of 1 KiB or more with zstd, sent
+// as Content-Encoding: zstd. The client in package jev turns it on, since
+// TypeSafe accepts it; turn it on elsewhere only for a server that does.
+func WithCompression(on bool) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		if !on {
+			c.zstd = nil
+			return nil
+		}
+		// The API caps the zstd window at 8 MiB. EncodeAll on one goroutine
+		// is safe for concurrent use, so one encoder serves the client.
+		enc, err := zstd.NewWriter(nil, zstd.WithWindowSize(8<<20), zstd.WithEncoderConcurrency(1))
+		if err != nil {
+			return fmt.Errorf("systemone: zstd: %w", err)
+		}
+		c.zstd = enc
 		return nil
 	})
 }

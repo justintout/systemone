@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/justintout/systemone/internal/bridge"
+	"github.com/klauspost/compress/zstd"
 )
 
 // NoTimeout removes the per-attempt bound from a call when given as a
@@ -41,6 +42,7 @@ type Client struct {
 	requestIDHdr string
 	retry        RetryPolicy
 	timeout      time.Duration
+	zstd         *zstd.Encoder
 	userAgent    string
 	logger       logger
 	now          func() time.Time
@@ -100,8 +102,8 @@ type Request struct {
 	// Model overrides the client default for this request.
 	Model string
 	// Header adds or replaces headers for this request. Authorization, Accept,
-	// Content-Type and User-Agent are set by the client after this is applied,
-	// so they cannot be overridden here; see [WithUserAgent].
+	// Content-Type, Content-Encoding and User-Agent are set by the client after
+	// this is applied, so they cannot be overridden here; see [WithUserAgent].
 	Header http.Header
 	// Retry overrides the client's retry policy for this request. A nil Retry
 	// inherits it; a zero RetryPolicy turns retries off for this call alone.
@@ -141,18 +143,30 @@ func (c *Client) do(ctx context.Context, req Request, ext bridge.Extension) (*Re
 	if model == "" {
 		model = c.model
 	}
-	body, err := encodeRequest(req, model, ext)
+	encoded, err := encodeRequest(req, model, ext)
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.send(ctx, call{
-		method:   http.MethodPost,
-		endpoint: c.evaluateEndpoint(model),
-		body:     body,
-		header:   req.Header,
-		retry:    req.Retry,
-		timeout:  req.Timeout,
-	})
+	call := call{
+		method:      http.MethodPost,
+		endpoint:    c.evaluateEndpoint(model),
+		body:        encoded,
+		logBody:     encoded,
+		contentType: "application/json",
+		header:      req.Header,
+		retry:       req.Retry,
+		timeout:     req.Timeout,
+	}
+	if ext.Wrap != nil {
+		if call.body, call.contentType, err = ext.Wrap(encoded); err != nil {
+			return nil, err
+		}
+	}
+	if c.zstd != nil && len(call.body) >= compressionThreshold {
+		call.body = c.zstd.EncodeAll(call.body, nil)
+		call.contentEncoding = "zstd"
+	}
+	res, err := c.send(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -281,12 +295,17 @@ func (c *Client) requestID(resp *http.Response) string {
 
 // call is one API call and the per-request overrides that apply to it.
 type call struct {
-	method   string
-	endpoint string
-	body     []byte
-	header   http.Header
-	retry    *RetryPolicy
-	timeout  time.Duration
+	method          string
+	endpoint        string
+	body            []byte
+	contentType     string
+	contentEncoding string
+	// logBody is the JSON request, which is what a debug log can show; body
+	// may be multipart or compressed.
+	logBody []byte
+	header  http.Header
+	retry   *RetryPolicy
+	timeout time.Duration
 }
 
 func (c *Client) policy(call call) RetryPolicy {
@@ -362,15 +381,18 @@ func (c *Client) attempt(ctx context.Context, call call, attempt int) (rawRespon
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
-	if call.body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if call.contentType != "" {
+		req.Header.Set("Content-Type", call.contentType)
+	}
+	if call.contentEncoding != "" {
+		req.Header.Set("Content-Encoding", call.contentEncoding)
 	}
 
 	start := c.now()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		err = fmt.Errorf("systemone: %s %s: %w", call.method, call.endpoint, err)
-		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, nil, nil, "", err)
+		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.logBody, nil, nil, "", err)
 		return rawResponse{}, err
 	}
 	defer resp.Body.Close()
@@ -378,11 +400,11 @@ func (c *Client) attempt(ctx context.Context, call call, attempt int) (rawRespon
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("systemone: reading response: %w", err)
-		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, resp, nil, c.requestID(resp), err)
+		c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.logBody, resp, nil, c.requestID(resp), err)
 		return rawResponse{}, err
 	}
 	id := c.requestID(resp)
-	c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.body, resp, data, id, nil)
+	c.logger.attempt(ctx, call.method, call.endpoint, attempt, start, req, call.logBody, resp, data, id, nil)
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return rawResponse{}, &Error{

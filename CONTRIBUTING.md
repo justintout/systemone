@@ -10,11 +10,13 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
-CI runs the same checks on Go 1.24 and current stable.
+CI runs the same checks on Go 1.25 and current stable.
 
 A few conventions from the code:
 
-- No dependencies outside the standard library.
+- Prefer the standard library. A dependency has to be the well-known,
+  permissively licensed choice for something the standard library lacks, as
+  `klauspost/compress` is for zstd.
 - No fallback paths, version shims, or defaults that paper over missing
   configuration. Validation and error handling are not fallbacks.
 - Comment why, not what.

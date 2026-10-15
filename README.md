@@ -67,7 +67,10 @@ client takes the same `systemone.Question` values and returns the same
 | `systemone` | A server that implements the base API itself |
 
 `jev.New` reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
-`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`.
+`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`. It compresses request bodies
+of 1 KiB or more with zstd, as TypeSafe's SDKs do;
+`systemone.WithCompression(false)` turns that off, and `WithCompression(true)`
+turns it on for another deployment that accepts it.
 
 ### Jev images
 
@@ -96,8 +99,9 @@ b, err := where.From(res) // systemone.BoxAnswer
 crop := b.Rect(width, height)
 ```
 
-A request that places an image without listing it, or lists one it never
-places, fails before it is sent. The client sets the
+Images travel as multipart file parts, so they are not inflated by base64. A
+request that places an image without listing it, or lists one it never places,
+fails before it is sent. The client sets the
 `TypeSafe-Danger-Zone-Images` header TypeSafe requires on any request with an
 image or a Box question. Images and Box are experimental at TypeSafe, and
 [their limits](https://docs.typesafe.ai/images#limits) are enforced there, not
