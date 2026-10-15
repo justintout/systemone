@@ -13,24 +13,6 @@ import (
 // record is ever enabled.
 const LevelOff = slog.Level(math.MaxInt32)
 
-// parseLogLevel reads the level names LogLevelEnv accepts, which match the
-// other TypeSafe SDKs.
-func parseLogLevel(name string) (slog.Level, bool) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "debug":
-		return slog.LevelDebug, true
-	case "info":
-		return slog.LevelInfo, true
-	case "warn", "warning":
-		return slog.LevelWarn, true
-	case "error":
-		return slog.LevelError, true
-	case "off":
-		return LevelOff, true
-	}
-	return 0, false
-}
-
 // logger wraps the caller's slog.Logger. A client with no logger does nothing.
 type logger struct {
 	log   *slog.Logger

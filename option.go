@@ -10,23 +10,15 @@ import (
 	"time"
 )
 
-// Environment variables read when the matching option is not given.
-const (
-	APIKeyEnv       = "TYPESAFE_API_KEY"
-	BaseURLEnv      = "TYPESAFE_BASE_URL"
-	DefaultModelEnv = "TYPESAFE_DEFAULT_MODEL"
-	LogLevelEnv     = "TYPESAFE_LOG_LEVEL"
-)
-
 // DefaultTimeout bounds one attempt unless [WithTimeout] says otherwise.
 const DefaultTimeout = 10 * time.Second
 
-// ErrNoAPIKey is returned by [New] when no API key is given and APIKeyEnv is
-// unset.
+// ErrNoAPIKey is returned by [New] when no API key is given.
 var ErrNoAPIKey = errors.New("systemone: no API key")
 
-// ClientOption configures a [Client]. Explicit options take precedence over
-// environment variables, which take precedence over the defaults.
+// ClientOption configures a [Client]. The clients in packages jev and clef take
+// the same options, applied after their own defaults, so an option given there
+// overrides the deployment's setting.
 type ClientOption interface {
 	apply(*Client) error
 }
@@ -35,7 +27,7 @@ type clientOptionFunc func(*Client) error
 
 func (f clientOptionFunc) apply(c *Client) error { return f(c) }
 
-// WithAPIKey sets the API key, overriding APIKeyEnv.
+// WithAPIKey sets the API key.
 func WithAPIKey(key string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		if key == "" {
@@ -46,8 +38,7 @@ func WithAPIKey(key string) ClientOption {
 	})
 }
 
-// WithBaseURL sets the API root, overriding BaseURLEnv. Endpoint paths are
-// appended to it.
+// WithBaseURL sets the API root. Endpoint paths are appended to it.
 func WithBaseURL(rawURL string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		u, err := url.Parse(rawURL)
@@ -63,9 +54,7 @@ func WithBaseURL(rawURL string) ClientOption {
 	})
 }
 
-// WithModel sets the model used when a request does not name one, overriding
-// DefaultModelEnv and the provider default. See
-// https://docs.typesafe.ai/models.
+// WithModel sets the model used when a request does not name one.
 func WithModel(model string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		if model == "" {
@@ -78,8 +67,7 @@ func WithModel(model string) ClientOption {
 
 // WithEvaluatePath sets the path an evaluation is posted to, appended to the
 // base URL. A [ModelPlaceholder] in it is replaced with the model of the
-// request. Use it to reach a fine-tuned or self-hosted model whose path is not
-// the one its [Provider] names.
+// request, for deployments that name the model in the URL as well as the body.
 func WithEvaluatePath(path string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		if path == "" {
@@ -114,16 +102,6 @@ func WithResultKey(key string) ClientOption {
 func WithRequestIDHeader(name string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {
 		c.requestIDHdr = name
-		return nil
-	})
-}
-
-// WithAcceptsImages says whether the deployment reads [Request.Images], which
-// only a Clef deployment does. It overrides the provider's own answer, for a
-// fine-tuned or self-hosted Clef built from a Provider that does not say so.
-func WithAcceptsImages(ok bool) ClientOption {
-	return clientOptionFunc(func(c *Client) error {
-		c.acceptsImages = ok
 		return nil
 	})
 }
@@ -186,8 +164,7 @@ func WithRetry(p RetryPolicy) ClientOption {
 // WithLogger sends one record per HTTP attempt to log. The client logs nothing
 // until this option is given, so it stays quiet inside a library by default.
 //
-// The level comes from LogLevelEnv, which accepts debug, info, warn, error and
-// off, and defaults to info; [WithLogLevel] overrides it. At info each record
+// The level defaults to info; [WithLogLevel] changes it. At info each record
 // is a summary: method, URL, attempt, duration, status, and request ID. At
 // debug it also carries headers and bodies.
 //
@@ -203,7 +180,7 @@ func WithLogger(log *slog.Logger) ClientOption {
 	})
 }
 
-// WithLogLevel sets the level [WithLogger] logs at, overriding LogLevelEnv.
+// WithLogLevel sets the level [WithLogger] logs at.
 // Pass [LevelOff] to disable logging without removing the logger.
 func WithLogLevel(level slog.Level) ClientOption {
 	return clientOptionFunc(func(c *Client) error {

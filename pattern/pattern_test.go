@@ -117,7 +117,7 @@ func walkStub(t *testing.T, confidence float64) (*systemone.Client, *[]map[strin
 	}))
 	t.Cleanup(srv.Close)
 
-	c, err := systemone.New(systemone.WithAPIKey("k"), systemone.WithBaseURL(srv.URL))
+	c, err := systemone.New(systemone.WithAPIKey("k"), systemone.WithBaseURL(srv.URL), systemone.WithModel("m"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestWalkSurfacesRequestErrors(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	c, err := systemone.New(systemone.WithAPIKey("k"), systemone.WithBaseURL(srv.URL))
+	c, err := systemone.New(systemone.WithAPIKey("k"), systemone.WithBaseURL(srv.URL), systemone.WithModel("m"))
 	if err != nil {
 		t.Fatal(err)
 	}
