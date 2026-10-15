@@ -42,7 +42,7 @@ var (
 	urgent = systemone.NewNoul("urgent", "Does this convey urgency?")
 )
 
-client, err := jev.New() // or clef.New, decisions.New, systemone.New
+client, err := jev.New() // or clef.New, foundry.New, systemone.New
 
 res, err := client.Ask(ctx, ticket, team, urgent)
 
@@ -70,7 +70,7 @@ to know which deployment answers them.
 | --- | --- | --- |
 | `jev` | TypeSafe's hosted [Jev](https://docs.typesafe.ai/models) models | Images, Box questions, long context |
 | `clef` | Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/) models on Workers AI | Images |
-| `decisions` | Microsoft's [Microsoft-Decision-1](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision) in Foundry | None |
+| `foundry` | Microsoft's [Microsoft-Decision-1](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision) in Foundry | None |
 | `systemone` | Any server that implements the base API | None |
 
 Extensions travel in the deployment's own request type, `jev.Request` or
@@ -160,22 +160,35 @@ the deployment, not here. A fine-tuned or self-hosted Clef is `clef.New` with
 
 ### Microsoft-Decision-1
 
-`decisions.New` takes the Foundry resource endpoint and the deployment name.
+`foundry.New` takes the Foundry resource endpoint and the deployment name.
 Requests name the deployment, not the model, and the response's `Model` reports
 the underlying model. Foundry takes an Entra ID token as a bearer token, or a
 resource API key in its `api-key` header:
 
 ```go
-client, err := decisions.New(endpoint, "triage-d1", systemone.WithAPIKey(entraToken))
+client, err := foundry.New(endpoint, "triage-d1", systemone.WithAPIKey(entraToken))
 
-client, err := decisions.New(endpoint, "triage-d1",
-	systemone.WithAPIKey(key), systemone.WithAPIKeyHeader(decisions.APIKeyHeader))
+client, err := foundry.New(endpoint, "triage-d1",
+	systemone.WithAPIKey(key), systemone.WithAPIKeyHeader(foundry.APIKeyHeader))
 ```
 
-An Entra token expires, usually within an hour, and the client keeps the one it
-was built with. A long-running process should use an API key or build a new
-client with a fresh token. Microsoft-Decision-1 reads text and JSON state, with
-no images, and has no model listing.
+The client sends the token it was built with and never refreshes it, so this
+module does not depend on Azure's SDK. An Entra token expires, usually within
+an hour. A long-running process should use an API key, or get tokens from
+[azidentity](https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azidentity)
+and build a new client before each one expires. A client is cheap to build,
+and azidentity caches the token until it nears expiry:
+
+```go
+cred, err := azidentity.NewDefaultAzureCredential(nil)
+
+tok, err := cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{foundry.TokenScope}})
+client, err := foundry.New(endpoint, "triage-d1", systemone.WithAPIKey(tok.Token))
+// Build the next client before tok.ExpiresOn.
+```
+
+Microsoft-Decision-1 reads text and JSON state, with no images, and has no
+model listing.
 
 ### Your own server
 
@@ -237,7 +250,7 @@ as text, JSON-encoding a structured one.
 ## Client
 
 Every constructor takes the same `systemone.ClientOption` values. `jev.New`,
-`clef.New` and `decisions.New` apply them after the deployment's defaults, so
+`clef.New` and `foundry.New` apply them after the deployment's defaults, so
 an option overrides a default:
 
 ```go

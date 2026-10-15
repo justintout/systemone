@@ -26,7 +26,7 @@ const NoTimeout = -1 * time.Nanosecond
 // Client sends requests to a deployment of the base System One API: text
 // state, and Choice, Noul and Score questions. It is safe for concurrent use.
 //
-// Use it for a server that implements the API itself. Package decisions
+// Use it for a server that implements the API itself. Package foundry
 // configures one for Microsoft Foundry. TypeSafe's Jev and Cloudflare's Clef
 // extend the API, and their clients, in packages jev and clef, configure this
 // one and add those extensions.

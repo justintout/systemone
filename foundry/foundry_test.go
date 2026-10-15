@@ -1,4 +1,4 @@
-package decisions_test
+package foundry_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/justintout/systemone"
-	"github.com/justintout/systemone/decisions"
+	"github.com/justintout/systemone/foundry"
 )
 
 var urgent = systemone.NewNoul("is_urgent", "Does this convey urgency?")
@@ -42,11 +42,11 @@ func TestFoundry(t *testing.T) {
 		wantValue  string
 	}{
 		{"entra token", []systemone.ClientOption{systemone.WithAPIKey("entra-token")}, "Authorization", "Bearer entra-token"},
-		{"api key", []systemone.ClientOption{systemone.WithAPIKey("res-key"), systemone.WithAPIKeyHeader(decisions.APIKeyHeader)}, "Api-Key", "res-key"},
+		{"api key", []systemone.ClientOption{systemone.WithAPIKey("res-key"), systemone.WithAPIKeyHeader(foundry.APIKeyHeader)}, "Api-Key", "res-key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, err := decisions.New(srv.URL, "triage-d1", tt.opts...)
+			c, err := foundry.New(srv.URL, "triage-d1", tt.opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,17 +80,17 @@ func TestFoundry(t *testing.T) {
 		})
 	}
 
-	c, err := decisions.New(srv.URL, "triage-d1", systemone.WithAPIKey("k"))
+	c, err := foundry.New(srv.URL, "triage-d1", systemone.WithAPIKey("k"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Models(context.Background()); !errors.Is(err, systemone.ErrNoModelList) {
 		t.Errorf("Models err = %v, want ErrNoModelList", err)
 	}
-	if _, err := decisions.New("", "d", systemone.WithAPIKey("k")); err == nil {
+	if _, err := foundry.New("", "d", systemone.WithAPIKey("k")); err == nil {
 		t.Error("want an error without an endpoint")
 	}
-	if _, err := decisions.New(srv.URL, "", systemone.WithAPIKey("k")); err == nil {
+	if _, err := foundry.New(srv.URL, "", systemone.WithAPIKey("k")); err == nil {
 		t.Error("want an error without a deployment")
 	}
 }

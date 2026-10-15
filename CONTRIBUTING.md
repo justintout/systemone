@@ -12,14 +12,12 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 CI runs the same checks on Go 1.25 and current stable.
 
-Tests tagged `live` call TypeSafe, Cloudflare and Microsoft Foundry for real.
-The release workflow runs the TypeSafe and Cloudflare ones before it tags; run
-them yourself with keys for each:
+Tests tagged `live` call TypeSafe and Cloudflare for real. The release workflow
+runs them before it tags; run them yourself with keys for both:
 
 ```sh
 export TYPESAFE_API_KEY=... CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
-export AZURE_ENDPOINT=... DEPLOYMENT_NAME=... AZURE_API_KEY=...
-go test -tags live -count=1 ./jev ./clef ./decisions
+go test -tags live -count=1 ./jev ./clef
 ```
 
 They check that each kind of request flows end to end and its answers decode.
