@@ -26,15 +26,18 @@ const NoTimeout = -1 * time.Nanosecond
 // Client sends requests to a deployment of the base System One API: text
 // state, and Choice, Noul and Score questions. It is safe for concurrent use.
 //
-// Use it for a server that implements the API itself. TypeSafe's Jev and
-// Cloudflare's Clef extend the API, and their clients, in packages jev and
-// clef, configure this one and add those extensions.
+// Use it for a server that implements the API itself. Package foundry
+// configures one for Microsoft Foundry. TypeSafe's Jev and Cloudflare's Clef
+// extend the API, and their clients, in packages jev and clef, configure this
+// one and add those extensions.
 type Client struct {
 	http    *http.Client
 	baseURL *url.URL
 	apiKey  string
-	model   string
-	header  http.Header
+	// apiKeyHdr carries the key verbatim when set, in place of Authorization.
+	apiKeyHdr string
+	model     string
+	header    http.Header
 	// Paths, envelope and request ID header of the deployment.
 	evaluatePath string
 	modelsPath   string
@@ -388,7 +391,11 @@ func (c *Client) attempt(ctx context.Context, call call, attempt int) (rawRespon
 	for k, vs := range call.header {
 		req.Header[http.CanonicalHeaderKey(k)] = vs
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKeyHdr == "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else {
+		req.Header.Set(c.apiKeyHdr, c.apiKey)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
 	if call.contentType != "" {

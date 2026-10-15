@@ -18,9 +18,9 @@ const DefaultTimeout = 10 * time.Second
 // ErrNoAPIKey is returned by [New] when no API key is given.
 var ErrNoAPIKey = errors.New("systemone: no API key")
 
-// ClientOption configures a [Client]. The clients in packages jev and clef take
-// the same options, applied after their own defaults, so an option given there
-// overrides the deployment's setting.
+// ClientOption configures a [Client]. The constructors in packages jev, clef
+// and foundry take the same options, applied after their own defaults, so an
+// option given there overrides the deployment's setting.
 type ClientOption interface {
 	apply(*Client) error
 }
@@ -36,6 +36,18 @@ func WithAPIKey(key string) ClientOption {
 			return ErrNoAPIKey
 		}
 		c.apiKey = key
+		return nil
+	})
+}
+
+// WithAPIKeyHeader sends the API key as the value of the named header, for a
+// deployment that does not read it from Authorization: Bearer.
+func WithAPIKeyHeader(name string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		if name == "" {
+			return errors.New("systemone: empty API key header name")
+		}
+		c.apiKeyHdr = name
 		return nil
 	})
 }

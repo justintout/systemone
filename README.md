@@ -3,19 +3,23 @@
 [![CI](https://github.com/justintout/systemone/actions/workflows/ci.yml/badge.svg)](https://github.com/justintout/systemone/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/justintout/systemone.svg)](https://pkg.go.dev/github.com/justintout/systemone)
 
-A Go client for the [TypeSafe System One API](https://docs.typesafe.ai). Send
-one state and a set of questions; get one answer per question, each bound to
-the Go type you declared the question with, so options and score levels are
-checked by the compiler rather than compared against string literals.
+A Go client for System One APIs. A System One model answers typed questions
+about a state: it returns a probability, a choice among fixed options, or a
+position on an ordered scale, and writes no prose. TypeSafe
+[defined the API](https://docs.typesafe.ai), and other providers now serve
+models that speak it.
+
+This module sends one state and a set of questions to any of those deployments
+and returns one answer per question. Each answer is bound to the Go type you
+declared the question with, so the compiler checks options and score levels.
+Your code never compares them against string literals.
 
 ```
 go get github.com/justintout/systemone
 ```
 
-> This is an unofficial, community-maintained client. It is not built,
-> endorsed, or supported by TypeSafe. The official SDKs are
-> [Python](https://docs.typesafe.ai/sdk/python) and
-> [JavaScript](https://docs.typesafe.ai/sdk/javascript).
+> This is an unofficial, community-maintained client. TypeSafe, Cloudflare and
+> Microsoft do not build, endorse, or support it.
 
 ## Usage
 
@@ -38,7 +42,7 @@ var (
 	urgent = systemone.NewNoul("urgent", "Does this convey urgency?")
 )
 
-client, err := jev.New() // reads TYPESAFE_API_KEY
+client, err := jev.New() // or clef.New, foundry.New, systemone.New
 
 res, err := client.Ask(ctx, ticket, team, urgent)
 
@@ -56,23 +60,33 @@ failure rather than a branch that silently never fires.
 
 ## Deployments
 
-The client depends on the deployment. Questions and answers do not: every
-client takes the same `systemone.Question` values and returns the same
-`*systemone.Response`, and all of them satisfy `systemone.Asker`.
+Questions and answers belong to package `systemone` and are the same for every
+deployment. Only the client changes. Each client takes the same
+`systemone.Question` values and returns the same `*systemone.Response`, and all
+of them satisfy `systemone.Asker`, so code that asks questions does not need
+to know which deployment answers them.
 
-| Package | Deployment |
-| --- | --- |
-| `jev` | TypeSafe's hosted Jev models |
-| `clef` | Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/) models on Workers AI |
-| `systemone` | A server that implements the base API itself |
+| Package | Deployment | Extensions |
+| --- | --- | --- |
+| `jev` | TypeSafe's hosted [Jev](https://docs.typesafe.ai/models) models | Images, Box questions, long context |
+| `clef` | Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/) models on Workers AI | Images |
+| `foundry` | Microsoft's [Microsoft-Decision-1](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-microsoft-decision) in Foundry | None |
+| `systemone` | Any server that implements the base API | None |
+
+Extensions travel in the deployment's own request type, `jev.Request` or
+`clef.Request`, so only that deployment's client sends them. A `jev.Box`
+handed to another client is a build failure. A `jev.Image` placed in another
+client's request fails before it is sent.
+
+### Jev
 
 `jev.New` reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
-`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`. It compresses request bodies
-of 1 KiB or more with zstd, as TypeSafe's SDKs do;
-`systemone.WithCompression(false)` turns that off, and `WithCompression(true)`
-turns it on for another deployment that accepts it.
+`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL` (`debug`, `info`, `warn`,
+`error`, `off`). It sends `jev-latest` unless told otherwise. It compresses
+request bodies of 1 KiB or more with zstd, as TypeSafe's SDKs do;
+`systemone.WithCompression(false)` turns that off.
 
-### Jev images
+#### Images
 
 An image goes anywhere text can: the state, a question's instructions, or its
 criteria. A `jev.Image` placed as a value becomes the image there, and `Ref()`
@@ -112,6 +126,8 @@ image or a Box question. Images and Box are experimental at TypeSafe, and
 [their limits](https://docs.typesafe.ai/images#limits) are enforced there, not
 here.
 
+#### Long context
+
 `Request.LongContext` sets `TypeSafe-Danger-Zone-Long-Context`, which raises
 the request's context limits to 262k tokens at some cost in speed and accuracy.
 
@@ -142,6 +158,38 @@ Cloudflare's limits (four images, 4 MiB and 16 megapixels each) are enforced by
 the deployment, not here. A fine-tuned or self-hosted Clef is `clef.New` with
 `systemone.WithBaseURL` and `systemone.WithEvaluatePath`.
 
+### Microsoft-Decision-1
+
+`foundry.New` takes the Foundry resource endpoint and the deployment name.
+Requests name the deployment, not the model, and the response's `Model` reports
+the underlying model. Foundry takes an Entra ID token as a bearer token, or a
+resource API key in its `api-key` header:
+
+```go
+client, err := foundry.New(endpoint, "triage-d1", systemone.WithAPIKey(entraToken))
+
+client, err := foundry.New(endpoint, "triage-d1",
+	systemone.WithAPIKey(key), systemone.WithAPIKeyHeader(foundry.APIKeyHeader))
+```
+
+The client sends the token it was built with and never refreshes it, so this
+module does not depend on Azure's SDK. An Entra token expires, usually within
+an hour. A long-running process should use an API key, or get tokens from
+[azidentity](https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azidentity)
+and build a new client before each one expires. A client is cheap to build,
+and azidentity caches the token until it nears expiry:
+
+```go
+cred, err := azidentity.NewDefaultAzureCredential(nil)
+
+tok, err := cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{foundry.TokenScope}})
+client, err := foundry.New(endpoint, "triage-d1", systemone.WithAPIKey(tok.Token))
+// Build the next client before tok.ExpiresOn.
+```
+
+Microsoft-Decision-1 reads text and JSON state, with no images, and has no
+model listing.
+
 ### Your own server
 
 A server that implements only the base API has no default, so name it:
@@ -154,13 +202,13 @@ client, err := systemone.New(
 )
 ```
 
-`WithEvaluatePath`, `WithModelsPath`, `WithResultKey` and `WithRequestIDHeader`
-cover a deployment whose paths, envelope or request ID header differ. A
-`{model}` in the evaluate path is replaced with the model of the request.
+`WithEvaluatePath`, `WithModelsPath`, `WithResultKey`, `WithRequestIDHeader`
+and `WithAPIKeyHeader` cover a deployment whose paths, envelope, request ID
+header or credential header differ. A `{model}` in the evaluate path is
+replaced with the model of the request. `WithCompression(true)` sends zstd
+request bodies to a server that accepts them.
 
-See [`examples/`](examples) for more, including the support-ticket walkthrough
-from the [quick start](https://docs.typesafe.ai/introduction/quickstart)
-written with this SDK.
+See [`examples/`](examples) for worked examples against Jev and Clef.
 
 ## Primitives
 
@@ -201,11 +249,15 @@ as text, JSON-encoding a structured one.
 
 ## Client
 
+Every constructor takes the same `systemone.ClientOption` values. `jev.New`,
+`clef.New` and `foundry.New` apply them after the deployment's defaults, so
+an option overrides a default:
+
 ```go
-client, err := jev.New(
-	systemone.WithAPIKey(key),          // default: $TYPESAFE_API_KEY
-	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then api.typesafe.ai
-	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then jev-latest
+client, err := systemone.New(
+	systemone.WithBaseURL("https://decisions.internal"),
+	systemone.WithModel("support-ft"), // for requests that name no model
+	systemone.WithAPIKey(key),
 	systemone.WithHTTPClient(hc),
 	systemone.WithTimeout(30*time.Second), // per attempt
 	systemone.WithRetry(systemone.DefaultRetry()),
@@ -214,15 +266,15 @@ client, err := jev.New(
 )
 ```
 
-The same options configure `clef.New` and `systemone.New`. `Models` lists the
-models the account can send. `Do` takes a `Request` when one call needs to
-differ from the client's defaults:
+`Models` lists the models the account can send, on a deployment that publishes
+a listing; elsewhere it returns `systemone.ErrNoModelList`. `Do` takes a
+`Request` when one call needs to differ from the client's defaults:
 
 ```go
-res, err := client.Do(ctx, jev.Request{
+res, err := client.Do(ctx, systemone.Request{
 	State:     ticket,
 	Questions: []systemone.Question{team, urgent},
-	Model:     "jev-1.13.0",
+	Model:     "support-ft-2",
 	Header:    http.Header{"X-Trace-Id": {id}},
 	Retry:     &policy,              // nil inherits the client's
 	Timeout:   45 * time.Second,     // per attempt; zero inherits, NoTimeout removes the bound
@@ -261,8 +313,6 @@ case errors.Is(err, systemone.ErrServer):        // any 5xx
 
 The client is silent until you give it a logger. `WithLogger(log)` writes one
 `log/slog` record per HTTP attempt at `info`, or the level `WithLogLevel` sets.
-`jev.New` reads it from `$TYPESAFE_LOG_LEVEL` (`debug`, `info`, `warn`,
-`error`, `off`).
 
 At `info` each record is a summary: method, URL, attempt, duration, status, and
 request ID. At `debug` it also carries headers and bodies. Credential headers
@@ -270,8 +320,10 @@ are redacted; bodies are not, and the request body holds your state.
 
 ## Patterns
 
-`pattern` composes answers the way the TypeSafe docs describe. It is ordinary
-code over answers this package returns; the thresholds and weights are yours.
+`pattern` composes answers into larger decisions, following the patterns in
+TypeSafe's documentation. It is ordinary code over the answers this module
+returns, so it works with every deployment. You choose the thresholds and
+weights.
 
 - `Thresholds.Band` splits confidence into low, medium, and high so riskier
   actions can sit behind a higher bar.
