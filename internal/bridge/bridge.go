@@ -4,10 +4,16 @@
 // the time a package importing it calls one.
 package bridge
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Extension is what a deployment package adds to a request of the base API.
 type Extension struct {
+	// Questions are encoded after the request's own, for question types the
+	// base API lacks. Their IDs share one namespace with the request's.
+	Questions []Question
 	// Fields are extra top-level fields of the request body.
 	Fields map[string]any
 	// Check inspects the encoded state and questions before Fields are added
@@ -26,9 +32,15 @@ type Extension struct {
 // a meaningless string.
 const ImageRefPrefix = "systemone-image-"
 
-// Kind returns the wire type of a systemone.Question, such as "box". Package
-// systemone sets it.
-var Kind func(question any) string
+// Question is one extra question in its wire form.
+type Question struct {
+	ID   string
+	Wire any
+}
+
+// Answer returns the undecoded answer under id in a *systemone.Response.
+// Package systemone sets it.
+var Answer func(response any, id string) (json.RawMessage, bool)
 
 var do any
 

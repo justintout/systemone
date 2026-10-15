@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -31,8 +30,8 @@ const BaseURL = "https://api.typesafe.ai"
 const (
 	// Latest is the most recent stable release, and the default.
 	Latest = "jev-latest"
-	// Preview is the most recent release, stable or not. [systemone.Box]
-	// questions need it while Jev 1.14 is a preview.
+	// Preview is the most recent release, stable or not. [Box] questions need
+	// it while Jev 1.14 is a preview.
 	Preview = "jev-preview"
 )
 
@@ -120,11 +119,13 @@ func (c *Client) Models(ctx context.Context) ([]systemone.Model, error) {
 	return c.base.Models(ctx)
 }
 
-// Request is one evaluation. Its fields other than Images and LongContext mean
-// what they do in [systemone.Request].
+// Request is one evaluation. Its fields other than Boxes, Images and
+// LongContext mean what they do in [systemone.Request].
 type Request struct {
 	State     any
 	Questions []systemone.Question
+	// Boxes are asked alongside Questions, sharing their IDs' namespace.
+	Boxes []*Box
 	// Images lists every [Image] placed in the state, instructions or
 	// criteria. A request that places an image without listing it, or lists
 	// one it never places, fails before it is sent.
@@ -145,19 +146,26 @@ func (c *Client) Ask(ctx context.Context, state any, questions ...systemone.Ques
 }
 
 // Do sends one evaluation request. It turns on images for a request with an
-// image or a [systemone.Box] question, which TypeSafe requires and which is
-// otherwise a 400.
+// image or a [Box] question, which TypeSafe requires and which is otherwise a
+// 400.
 func (c *Client) Do(ctx context.Context, req Request) (*systemone.Response, error) {
 	listed, err := assets(req.Images)
 	if err != nil {
 		return nil, err
 	}
 	ext := bridge.Extension{Check: func(body []byte) error { return checkRefs(body, listed) }}
+	for _, b := range req.Boxes {
+		q, err := b.wire()
+		if err != nil {
+			return nil, err
+		}
+		ext.Questions = append(ext.Questions, q)
+	}
 	if len(listed) > 0 {
 		ext.Fields = map[string]any{"assets": listed}
 		ext.Wrap = func(body []byte) ([]byte, string, error) { return multipartBody(body, req.Images) }
 	}
-	images := len(listed) > 0 || slices.ContainsFunc(req.Questions, func(q systemone.Question) bool { return bridge.Kind(q) == "box" })
+	images := len(listed) > 0 || len(req.Boxes) > 0
 	header := req.Header
 	if images || req.LongContext {
 		// The caller's header may be shared across requests, so set ours on a

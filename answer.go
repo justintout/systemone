@@ -14,7 +14,7 @@ type Usage struct {
 
 // Response is the result of one evaluation. Answers are read through the
 // question handles that produced them: [Choice.From], [Score.From],
-// [Noul.From], [Box.From].
+// [Noul.From].
 type Response struct {
 	// Model is the versioned model that answered, even when the request named
 	// an alias such as jev-latest.
@@ -27,7 +27,7 @@ type Response struct {
 	answers map[string]json.RawMessage
 }
 
-// rawAnswer is the union of the answer shapes, decoded when a handle
+// rawAnswer is the union of the three answer shapes, decoded when a handle
 // narrows it to a typed answer.
 // The value-bearing fields are pointers so an absent field is distinguishable
 // from a real zero. Without that, a truncated noul answer reads as a confident
@@ -42,14 +42,6 @@ type rawAnswer struct {
 	Legend        map[string]Content `json:"legend"`
 	Probabilities map[string]float64 `json:"probabilities"`
 	Confidence    *float64           `json:"confidence"`
-	Box           *rawEdges          `json:"box"`
-}
-
-type rawEdges struct {
-	Top    *float64 `json:"top"`
-	Bottom *float64 `json:"bottom"`
-	Left   *float64 `json:"left"`
-	Right  *float64 `json:"right"`
 }
 
 // validate checks the fields the API documents as required for this primitive.
@@ -84,21 +76,6 @@ func (a rawAnswer) validate(kind string) error {
 		}
 		if len(a.Legend) == 0 {
 			return missing("legend")
-		}
-	case "box":
-		if a.Box == nil {
-			return missing("box")
-		}
-		for _, e := range []struct {
-			name string
-			v    *float64
-		}{{"top", a.Box.Top}, {"bottom", a.Box.Bottom}, {"left", a.Box.Left}, {"right", a.Box.Right}} {
-			if e.v == nil {
-				return missing("box." + e.name)
-			}
-		}
-		if a.Confidence == nil {
-			return missing("confidence")
 		}
 	}
 	return nil

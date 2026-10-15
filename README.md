@@ -86,18 +86,23 @@ badge, err := jev.NewImage(badgeJPG)
 var (
 	match = systemone.NewNoul("match",
 		"Is the person in `door` the person in this badge photo: "+badge.Ref()+"?")
-	where = systemone.NewBox("where", "the person in `door`")
+	where = jev.NewBox("where", "the person in `door`")
 )
 
 res, err := client.Do(ctx, jev.Request{
 	State:     map[string]any{"door": door},
-	Questions: []systemone.Question{match, where},
+	Questions: []systemone.Question{match},
+	Boxes:     []*jev.Box{where},
 	Images:    []jev.Image{door, badge},
 	Model:     jev.Preview, // Box needs Jev 1.14
 })
-b, err := where.From(res) // systemone.BoxAnswer
+b, err := where.From(res) // jev.BoxAnswer: Top, Bottom, Left, Right, Confidence
 crop := b.Rect(width, height)
 ```
+
+A `jev.Box` finds where something is in an image. Only Jev answers it, so it
+is not a `systemone.Question`: it goes in `Boxes`, and a Box handed to another
+deployment's client is a build failure.
 
 Images travel as multipart file parts, so they are not inflated by base64. A
 request that places an image without listing it, or lists one it never places,
@@ -119,8 +124,7 @@ client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AU
 ```
 
 That sends `clef`; set `Request.Model` to `clef.Flash` for the faster one. Clef
-does not answer Box questions. It reads images placed before the state rather
-than referenced from it, and `clef.NewImage` reads the content type from the
+reads images placed before the state rather than referenced from it, and `clef.NewImage` reads the content type from the
 bytes:
 
 ```go
@@ -165,7 +169,6 @@ written with this SDK.
 | `NewChoice[T ~string]` | `ChoiceAnswer[T]`: `Value`, `Probabilities`, `Confidence` | One of a defined set |
 | `NewNoul` | `NoulAnswer`: `Value`, the probability of yes | Whether a condition holds |
 | `NewScore[T ~int]` | `ScoreAnswer[T]`: `Value`, `Level`, `Legend`, `Probabilities`, `Confidence` | Degree along ordered levels |
-| `NewBox` | `BoxAnswer`: `Top`, `Bottom`, `Left`, `Right`, `Confidence` | Where something is in an image (Jev 1.14) |
 
 Instructions and every criterion take a string or any value that encodes to a
 JSON object or array, so a question can carry named data it refers to by

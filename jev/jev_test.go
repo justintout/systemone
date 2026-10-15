@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
 	"io"
 	"log/slog"
 	"maps"
@@ -35,6 +36,9 @@ type recorder struct {
 	Request *http.Request
 	Body    []byte
 	Parts   map[string]filePart
+	// reply is what the stub answers with, answersJSON unless a test says
+	// otherwise.
+	reply string
 }
 
 type filePart struct {
@@ -97,11 +101,11 @@ func (r *recorder) field(t *testing.T, name string) string {
 // test is configured the way a caller's would be.
 func stub(t *testing.T) *recorder {
 	t.Helper()
-	rec := &recorder{}
+	rec := &recorder{reply: answersJSON}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.read(t, r)
 		w.Header().Set("X-Typesafe-Request-Id", "req_123")
-		_, _ = io.WriteString(w, answersJSON)
+		_, _ = io.WriteString(w, rec.reply)
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv(jev.BaseURLEnv, srv.URL)
@@ -317,7 +321,7 @@ func TestImages(t *testing.T) {
 }
 
 func TestDangerZoneHeaders(t *testing.T) {
-	mug := systemone.NewBox("mug", "the coffee mug in `photo`")
+	mug := jev.NewBox("mug", "the coffee mug in `photo`")
 	shared := http.Header{"X-Trace-Id": {"abc"}}
 	for _, tt := range []struct {
 		name                string
@@ -325,7 +329,7 @@ func TestDangerZoneHeaders(t *testing.T) {
 		images, longContext string
 	}{
 		{"plain", jev.Request{State: "state", Questions: []systemone.Question{urgent}, Header: shared}, "", ""},
-		{"a box needs images on", jev.Request{State: "state", Questions: []systemone.Question{urgent, mug}, Header: shared}, "true", ""},
+		{"a box needs images on", jev.Request{State: "state", Questions: []systemone.Question{urgent}, Boxes: []*jev.Box{mug}, Header: shared}, "true", ""},
 		{"long context", jev.Request{State: "state", Questions: []systemone.Question{urgent}, LongContext: true, Header: shared}, "", "true"},
 	} {
 		rec := stub(t)
@@ -394,4 +398,87 @@ func TestCompression(t *testing.T) {
 	if got := rec.Request.Header.Get("Content-Encoding"); got != "" {
 		t.Errorf("turned off: Content-Encoding = %q", got)
 	}
+}
+
+// Box follows https://docs.typesafe.ai/primitives/box: sent with the other
+// questions, answered with four edges and a confidence.
+func TestBox(t *testing.T) {
+	mug := jev.NewBox("mug", "the coffee mug in `photo`")
+	ask := func(t *testing.T, reply string, req jev.Request) (*recorder, *systemone.Response, error) {
+		t.Helper()
+		rec := stub(t)
+		rec.reply = reply
+		c, err := jev.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := c.Do(context.Background(), req)
+		return rec, res, err
+	}
+
+	t.Run("wire form and answer", func(t *testing.T) {
+		rec, res, err := ask(t, `{"model":"jev-1.14.0","answers":{"mug":{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84},"confidence":0.92}},"usage":{}}`,
+			jev.Request{State: "state", Questions: []systemone.Question{urgent}, Boxes: []*jev.Box{mug}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"is_urgent":{"type":"noul","instructions":"Does this convey urgency?"},"mug":{"type":"box","instructions":"the coffee mug in ` + "`photo`" + `"}}`
+		if got := rec.field(t, "questions"); got != want {
+			t.Errorf("questions =\n %s\nwant\n %s", got, want)
+		}
+		b, err := mug.From(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (jev.BoxAnswer{Top: 0.25, Bottom: 0.82, Left: 0.44, Right: 0.84, Confidence: 0.92}); b != want {
+			t.Errorf("answer = %+v, want %+v", b, want)
+		}
+		if got, want := b.Rect(1000, 500), image.Rect(440, 125, 840, 410); got != want {
+			t.Errorf("Rect = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a box alone is a request", func(t *testing.T) {
+		if _, _, err := ask(t, answersJSON, jev.Request{State: "state", Boxes: []*jev.Box{mug}}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("refused before sending", func(t *testing.T) {
+		for name, req := range map[string]jev.Request{
+			"id shared with a question": {State: "state", Questions: []systemone.Question{urgent}, Boxes: []*jev.Box{jev.NewBox("is_urgent", "the mug")}},
+			"no instructions":           {State: "state", Boxes: []*jev.Box{jev.NewBox("mug", "")}},
+		} {
+			rec, _, err := ask(t, answersJSON, req)
+			var qerr *systemone.QuestionError
+			if !errors.As(err, &qerr) {
+				t.Errorf("%s: err = %v, want a QuestionError", name, err)
+			}
+			if rec.Request != nil {
+				t.Errorf("%s: the request was sent", name)
+			}
+		}
+	})
+
+	t.Run("incomplete answers", func(t *testing.T) {
+		for name, answer := range map[string]string{
+			"no edge":       `{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44},"confidence":0.92}`,
+			"no confidence": `{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84}}`,
+		} {
+			_, res, err := ask(t, `{"model":"m","answers":{"mug":`+answer+`},"usage":{}}`, jev.Request{State: "state", Boxes: []*jev.Box{mug}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mug.From(res); !errors.Is(err, systemone.ErrIncompleteAnswer) {
+				t.Errorf("%s: err = %v, want ErrIncompleteAnswer", name, err)
+			}
+		}
+		_, res, err := ask(t, answersJSON, jev.Request{State: "state", Boxes: []*jev.Box{mug}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mug.From(res); !errors.Is(err, systemone.ErrNoAnswer) {
+			t.Errorf("missing: err = %v, want ErrNoAnswer", err)
+		}
+	})
 }
