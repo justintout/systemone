@@ -36,7 +36,7 @@ type Step struct {
 // returning the steps taken so far.
 //
 // See https://docs.typesafe.ai/cookbooks/hierarchical_classification.
-func Walk(ctx context.Context, c *systemone.Client, state any, tree Tree, opts ...WalkOption) ([]Step, error) {
+func Walk(ctx context.Context, c systemone.Asker, state any, tree Tree, opts ...WalkOption) ([]Step, error) {
 	w := walk{
 		instructions: func(path []string) systemone.Content {
 			if len(path) == 0 {
@@ -114,7 +114,7 @@ func WithSubtreeDepth(n int) WalkOption {
 	return func(w *walk) { w.subtreeDepth = n }
 }
 
-func (w walk) level(ctx context.Context, c *systemone.Client, state any, node Tree, path []string) (Step, error) {
+func (w walk) level(ctx context.Context, c systemone.Asker, state any, node Tree, path []string) (Step, error) {
 	names := make([]string, 0, len(node))
 	for name := range node {
 		names = append(names, name)

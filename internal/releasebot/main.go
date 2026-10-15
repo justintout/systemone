@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/justintout/systemone"
+	"github.com/justintout/systemone/jev"
 )
 
 // Thresholds are deliberately asymmetric. Under this module's permanent-v0
@@ -124,7 +125,7 @@ func apiChanged(report string) bool {
 }
 
 func decide(ctx context.Context, baseTag, diff, apiReport, commits string) (decision, error) {
-	client, err := systemone.New(systemone.WithRetry(systemone.DefaultRetry()))
+	client, err := jev.New(systemone.WithRetry(systemone.DefaultRetry()))
 	if err != nil {
 		return decision{}, err
 	}

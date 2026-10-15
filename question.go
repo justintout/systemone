@@ -89,7 +89,8 @@ type wire struct {
 
 // pairs marshals as a JSON object that keeps insertion order, which a plain Go
 // map cannot. Choice options are sent in the order they were declared so the
-// model sees them the way they were written.
+// model sees them the way they were written, and the request body leads with
+// its state.
 type pairs []pair
 
 type pair struct {
@@ -112,7 +113,7 @@ func (p pairs) MarshalJSON() ([]byte, error) {
 		b = append(b, ':')
 		v, err := json.Marshal(kv.value)
 		if err != nil {
-			return nil, fmt.Errorf("criterion %q: %w", kv.key, err)
+			return nil, fmt.Errorf("%q: %w", kv.key, err)
 		}
 		b = append(b, v...)
 	}

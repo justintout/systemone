@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/justintout/systemone"
+	"github.com/justintout/systemone/jev"
 	"github.com/justintout/systemone/pattern"
 )
 
@@ -46,7 +48,7 @@ var (
 // Independent questions about the same state go in one request. They are
 // answered in parallel and cannot see one another's answers.
 func Example() {
-	client, err := systemone.New()
+	client, err := jev.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func Example() {
 // Confidence says whether to act on an answer, not whether the answer is right.
 // Gate riskier actions at a higher bar.
 func Example_confidenceGatedRouting() {
-	client, err := systemone.New()
+	client, err := jev.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func Example_confidenceGatedRouting() {
 // Score each dimension on its own, then combine with weights your code owns.
 // Changing a weight reranks existing answers without a new request.
 func Example_compositeScoring() {
-	client, err := systemone.New()
+	client, err := jev.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -131,7 +133,7 @@ func ExampleWithRetry() {
 	policy.MaxRetries = 4
 	policy.MaxBackoff = 10 * time.Second
 
-	client, err := systemone.New(
+	client, err := jev.New(
 		systemone.WithRetry(policy),
 		systemone.WithTimeout(30*time.Second),
 	)
@@ -143,7 +145,7 @@ func ExampleWithRetry() {
 
 // Classify an HTTP failure by its status.
 func ExampleError() {
-	client, err := systemone.New()
+	client, err := jev.New()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -161,4 +163,18 @@ func ExampleError() {
 	default:
 		fmt.Println(err)
 	}
+}
+
+// A server that implements the base API itself has no default deployment, so
+// name its URL and model.
+func ExampleNew() {
+	client, err := systemone.New(
+		systemone.WithBaseURL("https://decisions.internal"),
+		systemone.WithModel("support-ft"),
+		systemone.WithAPIKey(os.Getenv("DECISIONS_API_KEY")),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = client
 }

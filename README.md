@@ -38,7 +38,7 @@ var (
 	urgent = systemone.NewNoul("urgent", "Does this convey urgency?")
 )
 
-client, err := systemone.New() // reads TYPESAFE_API_KEY
+client, err := jev.New() // reads TYPESAFE_API_KEY
 
 res, err := client.Ask(ctx, ticket, team, urgent)
 
@@ -56,54 +56,56 @@ failure rather than a branch that silently never fires.
 
 ## Deployments
 
-Requests go to TypeSafe's hosted API unless a provider says otherwise.
-Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/)
-models take the same requests and return the same answers, so the provider is
-the only thing that changes:
+The client depends on the deployment. Questions and answers do not: every
+client takes the same `systemone.Question` values and returns the same
+`*systemone.Response`, and all of them satisfy `systemone.Asker`.
+
+| Package | Deployment |
+| --- | --- |
+| `jev` | TypeSafe's hosted Jev models |
+| `clef` | Cloudflare's [Clef](https://developers.cloudflare.com/workers-ai/models/clef/) models on Workers AI |
+| `systemone` | A server that implements the base API itself |
+
+`jev.New` reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
+`TYPESAFE_DEFAULT_MODEL` and `TYPESAFE_LOG_LEVEL`. `clef.New` takes the Workers
+AI account ID and a Workers AI token:
 
 ```go
-client, err := systemone.New(
-	systemone.WithProvider(systemone.Cloudflare(accountID)),
-	systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")),
-)
+client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")))
 ```
 
-That sends `clef`; set `Request.Model` to `systemone.ClefFlash` for the faster
-one. Clef publishes no model listing, so `Models` returns `ErrNoModelList`.
-
-Clef reads images, which Jev does not. They go in `Request.Images`, ahead of the
-state, and `NewImage` reads the content type from the bytes:
+That sends `clef`; set `Request.Model` to `clef.Flash` for the faster one. Clef
+reads images placed before the state, and `clef.NewImage` reads the content
+type from the bytes:
 
 ```go
 data, err := os.ReadFile("checkout.png")
-img, err := systemone.NewImage(data) // PNG, JPEG or WebP
+img, err := clef.NewImage(data) // PNG, JPEG or WebP
 
-res, err := client.Do(ctx, systemone.Request{
+res, err := client.Do(ctx, clef.Request{
 	State:     "A customer sent this screenshot of the checkout page.",
 	Questions: []systemone.Question{broken, severity},
-	Images:    []systemone.Image{img},
+	Images:    []clef.Image{img},
 })
 ```
 
-A provider says whether its deployment reads them, so images sent to Jev fail
-before the request leaves rather than at the far end. Cloudflare's limits — four
-images, 4 MiB and 16 megapixels each — are enforced by the deployment, not here.
+Cloudflare's limits (four images, 4 MiB and 16 megapixels each) are enforced by
+the deployment, not here. A fine-tuned or self-hosted Clef is `clef.New` with
+`systemone.WithBaseURL` and `systemone.WithEvaluatePath`.
 
-A fine-tuned or self-hosted model is a provider you fill in yourself. A
-`{model}` in `EvaluatePath` is replaced with the model of the request, for
-deployments that name it in the URL:
+A server that implements only the base API has no default, so name it:
 
 ```go
-systemone.WithProvider(systemone.Provider{
-	BaseURL:      "https://decisions.internal",
-	DefaultModel: "clef-support-ft",
-	EvaluatePath: "/v1/systemone",
-})
+client, err := systemone.New(
+	systemone.WithBaseURL("https://decisions.internal"),
+	systemone.WithModel("support-ft"),
+	systemone.WithAPIKey(key),
+)
 ```
 
-`WithBaseURL`, `WithModel`, `WithEvaluatePath`, `WithModelsPath`,
-`WithResultKey`, `WithRequestIDHeader` and `WithAcceptsImages` each override one
-field of it.
+`WithEvaluatePath`, `WithModelsPath`, `WithResultKey` and `WithRequestIDHeader`
+cover a deployment whose paths, envelope or request ID header differ. A
+`{model}` in the evaluate path is replaced with the model of the request.
 
 See [`examples/`](examples) for more, including the support-ticket walkthrough
 from the [quick start](https://docs.typesafe.ai/introduction/quickstart)
@@ -149,11 +151,10 @@ as text, JSON-encoding a structured one.
 ## Client
 
 ```go
-client, err := systemone.New(
+client, err := jev.New(
 	systemone.WithAPIKey(key),          // default: $TYPESAFE_API_KEY
-	systemone.WithProvider(provider),   // default: systemone.TypeSafe()
-	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then the provider's
-	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then the provider's
+	systemone.WithBaseURL(url),         // default: $TYPESAFE_BASE_URL, then api.typesafe.ai
+	systemone.WithModel("jev-1.13.0"),  // default: $TYPESAFE_DEFAULT_MODEL, then jev-latest
 	systemone.WithHTTPClient(hc),
 	systemone.WithTimeout(30*time.Second), // per attempt
 	systemone.WithRetry(systemone.DefaultRetry()),
@@ -162,11 +163,12 @@ client, err := systemone.New(
 )
 ```
 
-`Client.Models` lists the models the account can send. `Client.Do` takes a
-`Request` when one call needs to differ from the client's defaults:
+The same options configure `clef.New` and `systemone.New`. `Models` lists the
+models the account can send. `Do` takes a `Request` when one call needs to
+differ from the client's defaults:
 
 ```go
-res, err := client.Do(ctx, systemone.Request{
+res, err := client.Do(ctx, jev.Request{
 	State:     ticket,
 	Questions: []systemone.Question{team, urgent},
 	Model:     "jev-1.13.0",
@@ -192,7 +194,7 @@ request may be evaluated more than once by the service.
 
 An unsuccessful response is a `*systemone.Error` carrying the status, the raw
 body, the response headers, and the request ID, read from whichever header the
-provider names. Classify it with
+deployment names. Classify it with
 `errors.Is`:
 
 ```go
@@ -207,9 +209,9 @@ case errors.Is(err, systemone.ErrServer):        // any 5xx
 ### Logging
 
 The client is silent until you give it a logger. `WithLogger(log)` writes one
-`log/slog` record per HTTP attempt at the level in `$TYPESAFE_LOG_LEVEL`
-(`debug`, `info`, `warn`, `error`, `off`; default `info`), which
-`WithLogLevel` overrides.
+`log/slog` record per HTTP attempt at `info`, or the level `WithLogLevel` sets.
+`jev.New` reads it from `$TYPESAFE_LOG_LEVEL` (`debug`, `info`, `warn`,
+`error`, `off`).
 
 At `info` each record is a summary: method, URL, attempt, duration, status, and
 request ID. At `debug` it also carries headers and bodies. Credential headers

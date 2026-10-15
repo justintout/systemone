@@ -17,6 +17,7 @@ import (
 	"log"
 
 	"github.com/justintout/systemone"
+	"github.com/justintout/systemone/jev"
 )
 
 // Department is the set of teams a ticket can be routed to. Declaring it as a
@@ -60,7 +61,7 @@ const ticket = "Hi, I've been trying to connect my Stripe account for 3 days " +
 	"and the integration keeps failing. I'm losing sales. Please help ASAP."
 
 func main() {
-	client, err := systemone.New()
+	client, err := jev.New()
 	if err != nil {
 		log.Fatal(err)
 	}

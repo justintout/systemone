@@ -18,6 +18,7 @@
 //		urgent = systemone.NewNoul("is_urgent", "Does this convey urgency?")
 //	)
 //
+//	client, err := jev.New()
 //	res, err := client.Ask(ctx, "Help! My payouts have been failing for 3 days.", dept, urgent)
 //	if err != nil {
 //		return err
@@ -32,11 +33,11 @@
 // See https://docs.typesafe.ai for the concepts behind state, questions,
 // probabilities, and confidence.
 //
-// Requests go to TypeSafe's hosted API unless a [Provider] says otherwise.
-// Cloudflare's Clef models answer the same requests with the same answers, so
-// [Cloudflare] is all that changes to send questions to them, and a Provider
-// written by hand reaches a fine-tuned or self-hosted model. Clef also reads
-// images, which travel in [Request.Images].
+// The client depends on the deployment. Package jev reaches TypeSafe's hosted
+// Jev models and package clef reaches Cloudflare's Clef models; each adds its
+// deployment's extensions to the API. [Client] in this package speaks the base
+// API alone, for a server that implements it itself. All three take the same
+// questions, return the same [Response], and satisfy [Asker].
 //
 // This is an unofficial, community-maintained client, not built, endorsed, or
 // supported by TypeSafe.

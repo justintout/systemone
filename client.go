@@ -8,74 +8,79 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
+	"slices"
 	"time"
+
+	"github.com/justintout/systemone/internal/bridge"
 )
 
 // NoTimeout removes the per-attempt bound from a call when given as a
 // [Request.Timeout]. Any negative duration does the same.
 const NoTimeout = -1 * time.Nanosecond
 
-// Client sends requests to the System One API. It is safe for concurrent use.
+// Client sends requests to a deployment of the base System One API: text
+// state, and Choice, Noul and Score questions. It is safe for concurrent use.
+//
+// Use it for a server that implements the API itself. TypeSafe's Jev and
+// Cloudflare's Clef extend the API, and their clients, in packages jev and
+// clef, configure this one and add those extensions.
 type Client struct {
 	http    *http.Client
 	baseURL *url.URL
 	apiKey  string
 	model   string
 	header  http.Header
-	// Paths, envelope and request ID header of the deployment. See [Provider].
-	evaluatePath  string
-	modelsPath    string
-	resultKey     string
-	requestIDHdr  string
-	acceptsImages bool
-	retry         RetryPolicy
-	timeout       time.Duration
-	userAgent     string
-	logger        logger
-	now           func() time.Time
+	// Paths, envelope and request ID header of the deployment.
+	evaluatePath string
+	modelsPath   string
+	resultKey    string
+	requestIDHdr string
+	retry        RetryPolicy
+	timeout      time.Duration
+	userAgent    string
+	logger       logger
+	now          func() time.Time
 }
 
-// New builds a client. Without options it reads the API key from APIKeyEnv, the
-// base URL from BaseURLEnv, and the default model from DefaultModelEnv.
+// New builds a client. A deployment has no default, so [WithAPIKey],
+// [WithBaseURL] and [WithModel] are required:
+//
+//	c, err := systemone.New(
+//		systemone.WithBaseURL("https://decisions.internal"),
+//		systemone.WithModel("support-ft"),
+//		systemone.WithAPIKey(key),
+//	)
+//
+// Evaluations are posted to /v1/systemone and models are listed from
+// /v1/models, the paths the API defines, unless [WithEvaluatePath] and
+// [WithModelsPath] say otherwise.
 func New(opts ...ClientOption) (*Client, error) {
 	c := &Client{
-		http:      &http.Client{},
-		apiKey:    os.Getenv(APIKeyEnv),
-		header:    make(http.Header),
-		timeout:   DefaultTimeout,
-		userAgent: fmt.Sprintf("go-systemone/%s (%s; %s)", version(), runtime.Version(), runtime.GOOS),
-		logger:    logger{level: slog.LevelInfo},
-		now:       time.Now,
-	}
-	if err := WithProvider(TypeSafe()).apply(c); err != nil {
-		return nil, err
-	}
-	if v := os.Getenv(BaseURLEnv); v != "" {
-		if err := WithBaseURL(v).apply(c); err != nil {
-			return nil, err
-		}
-	}
-	if v := os.Getenv(DefaultModelEnv); v != "" {
-		c.model = v
-	}
-	if v := os.Getenv(LogLevelEnv); v != "" {
-		level, ok := parseLogLevel(v)
-		if !ok {
-			return nil, fmt.Errorf("systemone: %s=%q is not a level", LogLevelEnv, v)
-		}
-		c.logger.level = level
+		http:         &http.Client{},
+		header:       make(http.Header),
+		evaluatePath: "/v1/systemone",
+		modelsPath:   "/v1/models",
+		timeout:      DefaultTimeout,
+		userAgent:    fmt.Sprintf("go-systemone/%s (%s; %s)", version(), runtime.Version(), runtime.GOOS),
+		logger:       logger{level: slog.LevelInfo},
+		now:          time.Now,
 	}
 	for _, opt := range opts {
 		if err := opt.apply(c); err != nil {
 			return nil, err
 		}
 	}
-	if c.apiKey == "" {
+	switch {
+	case c.apiKey == "":
 		return nil, ErrNoAPIKey
+	case c.baseURL == nil:
+		return nil, errors.New("systemone: no base URL; see WithBaseURL")
+	case c.model == "":
+		return nil, errors.New("systemone: no model; see WithModel")
 	}
 	return c, nil
 }
@@ -92,9 +97,6 @@ type Request struct {
 	// Questions are asked in one call and answered in parallel. They cannot see
 	// one another's answers.
 	Questions []Question
-	// Images are read before the state. They are a Clef extension to the API,
-	// so the provider has to accept them; see [Provider.AcceptsImages].
-	Images []Image
 	// Model overrides the client default for this request.
 	Model string
 	// Header adds or replaces headers for this request. Authorization, Accept,
@@ -110,11 +112,16 @@ type Request struct {
 	Timeout time.Duration
 }
 
-type requestBody struct {
-	State     any     `json:"state"`
-	Model     string  `json:"model"`
-	Questions pairs   `json:"questions"`
-	Images    []Image `json:"images,omitempty"`
+// Asker asks questions about a state. [Client] and the clients in packages jev
+// and clef all satisfy it, for code that chooses a deployment at run time.
+type Asker interface {
+	Ask(ctx context.Context, state any, questions ...Question) (*Response, error)
+}
+
+func init() {
+	bridge.RegisterDo(func(ctx context.Context, c *Client, req Request, ext bridge.Extension) (*Response, error) {
+		return c.do(ctx, req, ext)
+	})
 }
 
 // Ask evaluates state against questions using the client's default model. It is
@@ -125,11 +132,15 @@ func (c *Client) Ask(ctx context.Context, state any, questions ...Question) (*Re
 
 // Do sends one evaluation request.
 func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
+	return c.do(ctx, req, bridge.Extension{})
+}
+
+func (c *Client) do(ctx context.Context, req Request, ext bridge.Extension) (*Response, error) {
 	model := req.Model
 	if model == "" {
 		model = c.model
 	}
-	body, err := c.encodeRequest(req, model)
+	body, err := encodeRequest(req, model, ext)
 	if err != nil {
 		return nil, err
 	}
@@ -211,15 +222,12 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	return body.Models, nil
 }
 
-func (c *Client) encodeRequest(req Request, model string) ([]byte, error) {
+func encodeRequest(req Request, model string, ext bridge.Extension) ([]byte, error) {
 	if req.State == nil {
 		return nil, errors.New("systemone: request has no state")
 	}
 	if len(req.Questions) == 0 {
 		return nil, errors.New("systemone: request has no questions")
-	}
-	if len(req.Images) > 0 && !c.acceptsImages {
-		return nil, fmt.Errorf("%w: the provider accepts none; see Provider.AcceptsImages", ErrImage)
 	}
 	qs := make(pairs, 0, len(req.Questions))
 	seen := make(map[string]bool, len(req.Questions))
@@ -235,7 +243,11 @@ func (c *Client) encodeRequest(req Request, model string) ([]byte, error) {
 		}
 		qs = append(qs, pair{key: id, value: w})
 	}
-	return json.Marshal(requestBody{State: req.State, Model: model, Questions: qs, Images: req.Images})
+	body := pairs{{key: "state", value: req.State}, {key: "model", value: model}, {key: "questions", value: qs}}
+	for _, k := range slices.Sorted(maps.Keys(ext.Fields)) {
+		body = append(body, pair{key: k, value: ext.Fields[k]})
+	}
+	return json.Marshal(body)
 }
 
 // requestID reads the request ID the deployment names, empty when it names
