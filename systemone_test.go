@@ -636,6 +636,7 @@ func TestClientOptions(t *testing.T) {
 			{"empty evaluate path", systemone.WithEvaluatePath("")},
 			{"nil http client", systemone.WithHTTPClient(nil)},
 			{"empty header name", systemone.WithHeader("", "v")},
+			{"empty api key header name", systemone.WithAPIKeyHeader("")},
 			{"negative timeout", systemone.WithTimeout(-time.Second)},
 			{"negative retries", systemone.WithRetry(systemone.RetryPolicy{MaxRetries: -1})},
 			{"empty user agent", systemone.WithUserAgent("")},

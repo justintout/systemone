@@ -40,6 +40,18 @@ func WithAPIKey(key string) ClientOption {
 	})
 }
 
+// WithAPIKeyHeader sends the API key as the value of the named header, for a
+// deployment that does not read it from Authorization: Bearer.
+func WithAPIKeyHeader(name string) ClientOption {
+	return clientOptionFunc(func(c *Client) error {
+		if name == "" {
+			return errors.New("systemone: empty API key header name")
+		}
+		c.apiKeyHdr = name
+		return nil
+	})
+}
+
 // WithBaseURL sets the API root. Endpoint paths are appended to it.
 func WithBaseURL(rawURL string) ClientOption {
 	return clientOptionFunc(func(c *Client) error {

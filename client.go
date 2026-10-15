@@ -33,8 +33,10 @@ type Client struct {
 	http    *http.Client
 	baseURL *url.URL
 	apiKey  string
-	model   string
-	header  http.Header
+	// apiKeyHdr carries the key verbatim when set, in place of Authorization.
+	apiKeyHdr string
+	model     string
+	header    http.Header
 	// Paths, envelope and request ID header of the deployment.
 	evaluatePath string
 	modelsPath   string
@@ -388,7 +390,11 @@ func (c *Client) attempt(ctx context.Context, call call, attempt int) (rawRespon
 	for k, vs := range call.header {
 		req.Header[http.CanonicalHeaderKey(k)] = vs
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKeyHdr == "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else {
+		req.Header.Set(c.apiKeyHdr, c.apiKey)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
 	if call.contentType != "" {
