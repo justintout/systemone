@@ -124,7 +124,10 @@ func init() {
 	bridge.RegisterDo(func(ctx context.Context, c *Client, req Request, ext bridge.Extension) (*Response, error) {
 		return c.do(ctx, req, ext)
 	})
-	bridge.Kind = func(q any) string { return q.(Question).wireType() }
+	bridge.Answer = func(r any, id string) (json.RawMessage, bool) {
+		a, ok := r.(*Response).answers[id]
+		return a, ok
+	}
 }
 
 // Ask evaluates state against questions using the client's default model. It is
@@ -241,7 +244,7 @@ func encodeRequest(req Request, model string, ext bridge.Extension) ([]byte, err
 	if req.State == nil {
 		return nil, errors.New("systemone: request has no state")
 	}
-	if len(req.Questions) == 0 {
+	if len(req.Questions)+len(ext.Questions) == 0 {
 		return nil, errors.New("systemone: request has no questions")
 	}
 	qs := make(pairs, 0, len(req.Questions))
@@ -257,6 +260,13 @@ func encodeRequest(req Request, model string, ext bridge.Extension) ([]byte, err
 			return nil, &QuestionError{QuestionID: id, Err: err}
 		}
 		qs = append(qs, pair{key: id, value: w})
+	}
+	for _, q := range ext.Questions {
+		if seen[q.ID] {
+			return nil, &QuestionError{QuestionID: q.ID, Err: errors.New("asked twice in one request")}
+		}
+		seen[q.ID] = true
+		qs = append(qs, pair{key: q.ID, value: q.Wire})
 	}
 	body, err := json.Marshal(pairs{{key: "state", value: req.State}, {key: "model", value: model}, {key: "questions", value: qs}})
 	if err != nil {

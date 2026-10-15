@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,7 +48,6 @@ var (
 	frustration = systemone.NewScore[Frustration]("frustration", "How frustrated is the customer?",
 		systemone.Levels[Frustration]("Calm", "Frustrated", "Very angry"),
 	)
-	mug = systemone.NewBox("mug", "the coffee mug in `photo`")
 )
 
 // answersJSON answers all three questions above. It is the shape the API
@@ -145,10 +143,6 @@ func TestQuestionWireFormat(t *testing.T) {
 		question: systemone.NewScore[Frustration]("q", "How frustrated?",
 			systemone.Levels[Frustration]("Calm", "Frustrated", "Very angry")),
 		want: `{"q":{"type":"score","instructions":"How frustrated?","criteria":["Calm","Frustrated","Very angry"]}}`,
-	}, {
-		name:     "box takes no criteria",
-		question: systemone.NewBox("q", "the coffee mug in `photo`"),
-		want:     `{"q":{"type":"box","instructions":"the coffee mug in ` + "`photo`" + `"}}`,
 	}, {
 		name: "structured instructions and criteria pass through",
 		question: systemone.NewNoul("q",
@@ -858,21 +852,13 @@ func TestIncompleteAnswersAreRejected(t *testing.T) {
 		name:   "score without a legend",
 		answer: `"frustration":{"type":"score","score":1,"probabilities":{"0":1},"confidence":0.9}`,
 		read:   func(r *systemone.Response) error { _, err := frustration.From(r); return err },
-	}, {
-		name:   "box without an edge",
-		answer: `"mug":{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44},"confidence":0.92}`,
-		read:   func(r *systemone.Response) error { _, err := mug.From(r); return err },
-	}, {
-		name:   "box without confidence",
-		answer: `"mug":{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84}}`,
-		read:   func(r *systemone.Response) error { _, err := mug.From(r); return err },
 	}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reply := `{"model":"m","answers":{` + tt.answer + `},"usage":{"input_tokens":1,"output_tokens":1}}`
 			c, _ := stub(t, reply)
-			res, err := c.Ask(context.Background(), "state", dept, urgent, frustration, mug)
+			res, err := c.Ask(context.Background(), "state", dept, urgent, frustration)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -880,25 +866,6 @@ func TestIncompleteAnswersAreRejected(t *testing.T) {
 				t.Errorf("err = %v, want ErrIncompleteAnswer", err)
 			}
 		})
-	}
-}
-
-// The answer shape is the one https://docs.typesafe.ai/primitives/box shows.
-func TestBoxAnswer(t *testing.T) {
-	c, _ := stub(t, `{"model":"jev-1.14.0","answers":{"mug":{"type":"box","box":{"top":0.25,"bottom":0.82,"left":0.44,"right":0.84},"confidence":0.92}},"usage":{}}`)
-	res, err := c.Ask(context.Background(), "state", mug)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := mug.From(res)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (systemone.BoxAnswer{Top: 0.25, Bottom: 0.82, Left: 0.44, Right: 0.84, Confidence: 0.92}); b != want {
-		t.Errorf("answer = %+v, want %+v", b, want)
-	}
-	if got, want := b.Rect(1000, 500), image.Rect(440, 125, 840, 410); got != want {
-		t.Errorf("Rect = %v, want %v", got, want)
 	}
 }
 
