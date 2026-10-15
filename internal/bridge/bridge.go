@@ -15,6 +15,9 @@ type Extension struct {
 	// ImageRefPrefix is refused, since only a deployment that sends assets
 	// can resolve it.
 	Check func(body []byte) error
+	// Wrap replaces the finished JSON body with the body to send and its
+	// content type, such as a multipart body carrying the JSON as one part.
+	Wrap func(body []byte) ([]byte, string, error)
 }
 
 // ImageRefPrefix starts every reference a jev.Image encodes as. It lets the

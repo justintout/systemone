@@ -3,11 +3,12 @@ package jev
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 
 	"github.com/justintout/systemone"
 	"github.com/justintout/systemone/internal/bridge"
@@ -35,15 +36,15 @@ import (
 // since the API ignores EXIF orientation. The deployment enforces them, not
 // this package. See https://docs.typesafe.ai/images.
 type Image struct {
-	ref    string
-	format string
-	data   []byte
+	ref         string
+	contentType string
+	data        []byte
 }
 
-// formats maps the content types [NewImage] accepts to the API's format names.
-var formats = map[string]string{
-	"image/png":  "png",
-	"image/jpeg": "jpg",
+// contentTypes are the types [NewImage] accepts.
+var contentTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
 }
 
 // NewImage reads the format from the bytes themselves and gives the image a
@@ -54,8 +55,7 @@ func NewImage(data []byte) (Image, error) {
 		return Image{}, fmt.Errorf("%w: no data", systemone.ErrImage)
 	}
 	ct := http.DetectContentType(data)
-	format, ok := formats[ct]
-	if !ok {
+	if !contentTypes[ct] {
 		return Image{}, fmt.Errorf("%w: content type %s, want image/png or image/jpeg", systemone.ErrImage, ct)
 	}
 	// A reference is matched as plain text anywhere in the request, so it has
@@ -64,7 +64,7 @@ func NewImage(data []byte) (Image, error) {
 	if _, err := rand.Read(id[:]); err != nil {
 		return Image{}, err
 	}
-	return Image{ref: bridge.ImageRefPrefix + hex.EncodeToString(id[:]), format: format, data: data}, nil
+	return Image{ref: bridge.ImageRefPrefix + hex.EncodeToString(id[:]), contentType: ct, data: data}, nil
 }
 
 // Ref is the image's reference, to write into a longer string where the
@@ -80,14 +80,16 @@ func (i Image) MarshalJSON() ([]byte, error) {
 	return json.Marshal(i.ref)
 }
 
-// asset is one entry of the request's assets field.
+// asset is one entry of the request's assets field. The image travels as the
+// multipart file part it names, which sends the bytes as they are rather than
+// a third larger in base64.
 type asset struct {
-	Type       string `json:"type"`
-	Format     string `json:"format"`
-	DataBase64 string `json:"data_base64"`
+	Type string `json:"type"`
+	Part string `json:"part"`
 }
 
-// assets builds the assets field from the listed images.
+// assets builds the assets field from the listed images. Each image's part is
+// named by its reference, which is already unique and never "request".
 func assets(images []Image) (map[string]asset, error) {
 	out := make(map[string]asset, len(images))
 	for _, img := range images {
@@ -97,9 +99,42 @@ func assets(images []Image) (map[string]asset, error) {
 		if _, dup := out[img.ref]; dup {
 			return nil, fmt.Errorf("%w: %s listed twice", systemone.ErrImage, img.ref)
 		}
-		out[img.ref] = asset{Type: "image", Format: img.format, DataBase64: base64.StdEncoding.EncodeToString(img.data)}
+		out[img.ref] = asset{Type: "image", Part: img.ref}
 	}
 	return out, nil
+}
+
+// multipartBody sends the JSON request as the first part, named request, and
+// each image as a file part after it.
+func multipartBody(request []byte, images []Image) ([]byte, string, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {`form-data; name="request"`},
+		"Content-Type":        {"application/json"},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := part.Write(request); err != nil {
+		return nil, "", err
+	}
+	for _, img := range images {
+		part, err := w.CreatePart(textproto.MIMEHeader{
+			"Content-Disposition": {fmt.Sprintf(`form-data; name=%q; filename=%q`, img.ref, img.ref)},
+			"Content-Type":        {img.contentType},
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		if _, err := part.Write(img.data); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), w.FormDataContentType(), nil
 }
 
 // checkRefs matches the references in an encoded body against the listed

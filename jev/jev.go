@@ -61,7 +61,8 @@ type Client struct {
 	base *systemone.Client
 }
 
-// New builds a client for TypeSafe's hosted API. It reads the API key from
+// New builds a client for TypeSafe's hosted API. It compresses request bodies
+// with zstd, which [systemone.WithCompression] turns off. It reads the API key from
 // APIKeyEnv, the base URL from BaseURLEnv, the default model from
 // DefaultModelEnv and the log level from LogLevelEnv, which accepts debug,
 // info, warn, error and off. Options override all of them.
@@ -70,6 +71,7 @@ func New(opts ...systemone.ClientOption) (*Client, error) {
 		systemone.WithBaseURL(BaseURL),
 		systemone.WithModel(Latest),
 		systemone.WithRequestIDHeader("X-Typesafe-Request-Id"),
+		systemone.WithCompression(true),
 	}
 	if v := os.Getenv(APIKeyEnv); v != "" {
 		defaults = append(defaults, systemone.WithAPIKey(v))
@@ -153,6 +155,7 @@ func (c *Client) Do(ctx context.Context, req Request) (*systemone.Response, erro
 	ext := bridge.Extension{Check: func(body []byte) error { return checkRefs(body, listed) }}
 	if len(listed) > 0 {
 		ext.Fields = map[string]any{"assets": listed}
+		ext.Wrap = func(body []byte) ([]byte, string, error) { return multipartBody(body, req.Images) }
 	}
 	images := len(listed) > 0 || slices.ContainsFunc(req.Questions, func(q systemone.Question) bool { return bridge.Kind(q) == "box" })
 	header := req.Header

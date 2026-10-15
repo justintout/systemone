@@ -3,12 +3,13 @@ package jev_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"maps"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/justintout/systemone"
 	"github.com/justintout/systemone/jev"
+	"github.com/klauspost/compress/zstd"
 )
 
 var urgent = systemone.NewNoul("is_urgent", "Does this convey urgency?")
@@ -27,10 +29,58 @@ const answersJSON = `{
   "usage": {"input_tokens": 296, "output_tokens": 20}
 }`
 
-// recorder keeps the last request a stub server received.
+// recorder keeps the last request a stub server received, decompressed. For a
+// multipart request, Body is the JSON part and Parts the files by name.
 type recorder struct {
 	Request *http.Request
 	Body    []byte
+	Parts   map[string]filePart
+}
+
+type filePart struct {
+	ContentType string
+	Data        []byte
+}
+
+// read decodes a request the way the API does.
+func (r *recorder) read(t *testing.T, req *http.Request) {
+	r.Request = req
+	var body io.Reader = req.Body
+	if req.Header.Get("Content-Encoding") == "zstd" {
+		dec, err := zstd.NewReader(req.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer dec.Close()
+		body = dec
+	}
+	mt, params, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if mt != "multipart/form-data" {
+		r.Body, _ = io.ReadAll(body)
+		return
+	}
+	r.Parts = make(map[string]filePart)
+	mr := multipart.NewReader(body, params["boundary"])
+	for i := 0; ; i++ {
+		p, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		data, _ := io.ReadAll(p)
+		if i == 0 {
+			if p.FormName() != "request" {
+				t.Errorf("first part = %q, want request", p.FormName())
+			}
+			r.Body = data
+			continue
+		}
+		r.Parts[p.FormName()] = filePart{ContentType: p.Header.Get("Content-Type"), Data: data}
+	}
 }
 
 // field returns one top-level field of the recorded request body, undecoded.
@@ -49,8 +99,7 @@ func stub(t *testing.T) *recorder {
 	t.Helper()
 	rec := &recorder{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.Body, _ = io.ReadAll(r.Body)
-		rec.Request = r
+		rec.read(t, r)
 		w.Header().Set("X-Typesafe-Request-Id", "req_123")
 		_, _ = io.WriteString(w, answersJSON)
 	}))
@@ -199,15 +248,18 @@ func TestImages(t *testing.T) {
 		if err := json.Unmarshal([]byte(rec.field(t, "assets")), &assets); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]string{"type": "image", "format": "jpg", "data_base64": base64.StdEncoding.EncodeToString(jpegBytes)}
+		want := map[string]string{"type": "image", "part": badge.Ref()}
 		if got := assets[badge.Ref()]; !maps.Equal(got, want) {
 			t.Errorf("badge asset = %v, want %v", got, want)
 		}
-		if got := assets[thumb.Ref()]["format"]; got != "png" {
-			t.Errorf("thumb format = %q", got)
+		if len(assets) != 3 || len(rec.Parts) != 3 {
+			t.Errorf("assets = %d, parts = %d, want 3 of each", len(assets), len(rec.Parts))
 		}
-		if len(assets) != 3 {
-			t.Errorf("assets = %d, want 3", len(assets))
+		if got := rec.Parts[badge.Ref()]; got.ContentType != "image/jpeg" || !bytes.Equal(got.Data, jpegBytes) {
+			t.Errorf("badge part = %+v", got)
+		}
+		if got := rec.Parts[thumb.Ref()]; got.ContentType != "image/png" || !bytes.Equal(got.Data, pngBytes) {
+			t.Errorf("thumb part = %+v", got)
 		}
 		if got := rec.Request.Header.Get(jev.ImagesHeader); got != "true" {
 			t.Errorf("%s = %q", jev.ImagesHeader, got)
@@ -300,5 +352,46 @@ func TestDangerZoneHeaders(t *testing.T) {
 	}
 	if len(shared) != 1 {
 		t.Errorf("the caller's header was changed: %v", shared)
+	}
+}
+
+// TypeSafe's SDKs compress bodies of 1 KiB or more with zstd, and so does this
+// one, images included.
+func TestCompression(t *testing.T) {
+	long := strings.Repeat("Payouts have been failing for three days. ", 50)
+	for _, tt := range []struct {
+		name     string
+		req      jev.Request
+		encoding string
+	}{
+		{"short body is sent as is", jev.Request{State: "state", Questions: []systemone.Question{urgent}}, ""},
+		{"long body", jev.Request{State: long, Questions: []systemone.Question{urgent}}, "zstd"},
+	} {
+		rec := stub(t)
+		c, err := jev.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Do(context.Background(), tt.req); err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.Request.Header.Get("Content-Encoding"); got != tt.encoding {
+			t.Errorf("%s: Content-Encoding = %q, want %q", tt.name, got, tt.encoding)
+		}
+		if got, _ := json.Marshal(tt.req.State); rec.field(t, "state") != string(got) {
+			t.Errorf("%s: state did not survive the round trip", tt.name)
+		}
+	}
+
+	rec := stub(t)
+	c, err := jev.New(systemone.WithCompression(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Ask(context.Background(), long, urgent); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Request.Header.Get("Content-Encoding"); got != "" {
+		t.Errorf("turned off: Content-Encoding = %q", got)
 	}
 }
