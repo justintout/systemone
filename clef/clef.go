@@ -3,7 +3,7 @@
 // ones package systemone defines, and it also reads images placed before the
 // state. See https://developers.cloudflare.com/workers-ai/models/clef.
 //
-//	client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_AUTH_TOKEN")))
+//	client, err := clef.New(accountID, systemone.WithAPIKey(os.Getenv("CLOUDFLARE_API_TOKEN")))
 //	res, err := client.Ask(ctx, ticket, team, urgent)
 //	t, err := team.From(res)
 //
